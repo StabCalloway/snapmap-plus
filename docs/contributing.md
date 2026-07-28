@@ -152,13 +152,34 @@ By default this compiles and runs twelve **self-contained native tests** (no gam
 - **`entity_settings_contract_test`** — persisted Entities controls, startup hydration, and the exclusive selection-direction contract.
 
 Two more tests scan a **real DOOM image** — a `DOOMx64vk.exe` that's been unpacked from its Steam DRM wrapper
-(e.g. with Steamless). Run them only if you're touching the signature resolver (`src/backend/signatures.c`):
+(e.g. with Steamless). **Running these is REQUIRED if you add or change any entry in the engine signature
+table** in `src/backend/signatures.c` — they are the only thing that checks a `known_rva`, and CI cannot run
+them (it has no game image), so a green CI does not cover you:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1 -Doom C:\path\to\unpacked-DOOMx64vk.exe
 #   sig_test     -- every engine signature resolves to its known RVA
 #   hooktol_test -- the resolver's hook-tolerant fallback (prologue-clobbered functions)
 ```
+
+### Which DOOM build addresses must come from
+
+This matters more than it looks, and it is easy to get wrong without noticing.
+
+The signature table is pinned to **one** DOOM build — the SteamStub-wrapped `DOOMx64vk.exe` with SHA256
+`139763E94F1A75B5310179F9EEEB8A949A1F53C49ACBC722FCFC5DFE7BB6D323`. That is **not** the build Steam
+currently ships. If your Ghidra project, your debugger, or your unpacked image is anything else, every raw
+address you read is for a different build and must be translated before it goes into `known_rva` or a call
+site. There is no single offset that converts between them: the newer build is a cluster-wise re-link, so
+different functions move by different — and sometimes opposite-signed — amounts.
+
+The trap is that a wrong address is **invisible in normal use**. Byte signatures are build-portable, so the
+scanner still finds the function and your feature works exactly as intended on either build. The only thing
+that breaks is the hook-tolerant fallback, which just quietly stops covering that function. `sig_test` is
+what catches it — hence "required" above.
+
+If you deliberately want to record an address from another build (useful — we do it), label it as such in
+the comment rather than putting it in a field that means "this build".
 
 A third test, `xinput_ordinal_test.c`, is a **runtime** cross-check of the XInput ordinal invariant — it loads
 a built DLL and calls its exports by ordinal. CI verifies that same invariant *statically* with `dumpbin` (the

@@ -80,7 +80,7 @@
  * live build, same re-derive recipe -- see that file's comment block for the OnDeactivate derivation).
  * The selection count is read to VERIFY the clear actually took effect before instantiating, because a
  * non-empty selection silently mis-wires the paste (see the PasteInstantiate signature comment).
- * DIRECT (doom-re campaign synthetic-action-injection, 2026-07-27). */
+ * DIRECT (our own reverse-engineering, 2026-07-27). */
 #define PASTE_PREFAB_ENTCOUNT_OFF 0x209e0   /* = editor+0x209a8+0x38 -> staged prefab entity count (s32) */
 #define ED_MODE_OBJ_OFF           0x22330   /* editor+0x22330 -> inline EntityMode object */
 #define ED_ENTITY_MODE_OFF        0x23618   /* editor+0x23618 -> active editor state id (2 == EntityMode) */
@@ -115,7 +115,7 @@
  * frame as (snapEdit_enableCopyPaste != 0) AND (staged entity count >= 1) AND (hovered id == -1). We
  * check what we can see so a request that the engine would silently ignore degrades to an honest
  * stage-only toast instead of a lie. `substate` here is the IDLE sub-state, inline at mode+0x1B0.
- * DIRECT (doom-re campaign synthetic-action-injection, 2026-07-27). */
+ * DIRECT (our own reverse-engineering, 2026-07-27). */
 #define MODE_IDLE_SUBSTATE_OFF    0x1B0      /* mode+0x1B0 -> the idle sub-state object (active when +0x1ac==1) */
 #define SUBSTATE_FLAGS1_OFF       0x41       /* substate+0x41 -> capability byte; bit 0x40 = paste available */
 #define SUBSTATE_PASTE_AVAIL_BIT  0x40
@@ -446,7 +446,7 @@ static void *ae_get_reflect(void)
  * inline buffer at +0x1c. There is NO small-string-optimization branch to take. This function used to
  * carry one (`len < 0x10 ? inline-at-+0x10 : heap-pointer`), which reads the pointer field's own bytes
  * as text and garbles every string under 16 characters. DIRECT, settled from the engine's own
- * idStr::Left (RVA 0x33e640) during the doom-re campaign `text-inspector-input-path`, where the same
+ * idStr::Left (RVA 0x33e640 on the newer retail build) during our own reverse-engineering, where the same
  * bug shipped briefly in swf_textedit.c and was caught live. `rawmap.c` always read it correctly.
  *
  * In THIS file the bug was latent rather than live: all three call sites read a rendered-JSON idStr,
@@ -961,7 +961,7 @@ static int ae_mkcmd_one(const char *prefab_text)
  *   1 = STAGED ONLY -- every abort path lands here, leaving exactly the old stage-only behaviour, so the
  *       caller falls back to the "press Ctrl+V" toast. There is no partially-instantiated outcome.
  *   2 = HELD -- instantiated and now grabbed, awaiting the user's positioning click.
- * DIRECT (doom-re campaign synthetic-action-injection, 2026-07-27). */
+ * DIRECT (our own reverse-engineering, 2026-07-27). */
 #define AE_PASTE_FAILED  0
 #define AE_PASTE_STAGED  1
 #define AE_PASTE_HELD    2
@@ -1107,13 +1107,11 @@ static void ae_toast_result(const char *op, int applied, int total)
      *   accl / acctargets   -> do_acc emits a nicer, target-count + receiver toast instead. */
     int quiet = (strcmp(op, "load-prefab") == 0) || (strcmp(op, "tl-inherit-portable") == 0) ||
                 (strcmp(op, "accl") == 0)         || (strcmp(op, "acctargets") == 0);
-    /* load-prefab is now stage-THEN-place (kind=2), and only the drain knows which of the two actually
-     * happened -- so it owns the toast rather than the page guessing at schedule time. "Placed" means the
-     * editor is holding the prefab for positioning; "staged" is the old manual-Ctrl+V fallback, which is
-     * still a correct, usable outcome (see sh_apply_last_place_result). */
-    /* (While Load/Place is back on kind=1 the page owns this toast again -- see poc_apply_load_prefab.
-     * Restore this block alongside kind=2 when the staged-prefab structure issue is fixed, since only
-     * the drain knows whether the pick-up actually happened.) */
+    /* load-prefab is CURRENTLY kind=1 (stage only), so the page owns its toast -- see
+     * poc_apply_load_prefab. If kind=2 (stage-THEN-place) is ever re-enabled, move that toast back here:
+     * only the drain knows which of the two outcomes actually happened ("placed" = the editor is holding
+     * the prefab for positioning, "staged" = the manual-Ctrl+V fallback, both usable). The distinction
+     * is already carried by sh_apply_last_place_result(). */
     if (iface && iface->vtbl && iface->vtbl->toast && !quiet)
         iface->vtbl->toast(iface, "SnapStack", text);
     /* ALSO log directly -- the toast slot logs too, but a no-editor/late drain might skip the engine toast. */

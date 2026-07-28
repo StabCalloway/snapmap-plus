@@ -355,8 +355,9 @@ static DWORD WINAPI bootstrap_thread(LPVOID p)
         /* SWF text-field clipboard (clone improvement -- vanilla has NO text copy/paste in the editor at
          * all, and it is genuinely absent rather than disabled: the stock SWF text-edit key handler has no
          * Ctrl branch, only a shift flag). Detours that handler so Ctrl+C copies the focused field's
-         * selection (whole field when nothing is selected). Read-only against the engine for now; paste
-         * lands once this half is confirmed live. */
+         * selection (whole field when nothing is selected) and Ctrl+V splices the clipboard in at the
+         * selection. Copy is pure reads; paste is the only write, and it is separately gated on its own
+         * idStr-assignment resolve -- if that misses, copy still works and paste stays dark. */
         sh_swf_textedit_install(g_doom_base);
     }
 

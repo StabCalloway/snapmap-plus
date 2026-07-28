@@ -149,7 +149,7 @@ entry at the bottom is the original POC buildout, before this doc tracked dates 
   deselects it, Delete deletes all of it, Move works, and every bottom-bar control applies -- for single
   and multi-entity selections, and when switching between entities. Previously only the explicit
   **Deselect** button worked, and Delete/Move misbehaved (Move could soft-lock the game).
-- **Root cause** (reverse-engineered in the companion doom-re project, campaign `native-click-deselect`):
+- **Root cause** (from our own reverse-engineering):
   the editor keeps a per-mode object inline in the editor object, and its state field says whether
   anything is selected. The native click handler sets that field on a successful hit *and* adds to the
   selection array; on an empty-space miss it deliberately does nothing at all. So an empty click only

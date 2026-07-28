@@ -67,15 +67,24 @@
  * is a small state enum: 1 = base/idle (nothing selected), 2 = an entity IS selected; +0xBB8 is the redraw/dirty
  * flag. The engine's own setters are one-liners -- SetSelected (RVA 0x1255120) is `{mode+0x1ac = 2; mode+0xBB8 = 1;}`
  * and SetIdle (RVA 0x1255100) is the same with 1 -- so we replicate the writes DIRECT rather than resolve two
- * trivial functions. NB: these RVAs are documentation for the re-derive only, never resolved at runtime -- and note
- * this file's older AddToSelection/ClearSelection RVAs (0x59f210/0x59fa00) were PROVEN STALE by the same campaign
- * (the real offsets on this build are 0x11fad50/0x11fb540), which is exactly why they resolve by signature.
+ * trivial functions.
+ * !! ADDRESS SPACE: every bare RVA in this comment block (GetMode 0x1183c40, SetSelected 0x1255120,
+ * SetIdle 0x1255100, the click handler 0x1264ba0, and the ones in the MAP_ENT_LAYER_ARR_OFF block
+ * below) was read off the NEWER RETAIL DOOM build, not the build this project pins (see the header of
+ * BACKEND_ENGINE_SIGNATURES in signatures.c). They are documentation for the re-derive only and are
+ * never resolved at runtime, so they are harmless here -- but do NOT copy one into a known_rva or a
+ * call site without translating it first. There is no global delta between the builds.
+ * Corollary, since an earlier revision of this note got it backwards: this file's
+ * AddToSelection/ClearSelection RVAs 0x59f210/0x59fa00 are CORRECT on the pinned build and must not be
+ * "fixed". 0x11fad50/0x11fb540 are the same two functions on the newer build (exactly +0xC5BB40). Both
+ * pairs are right; they just describe different builds. The struct OFFSETS below are build-specific in
+ * the ordinary way and were confirmed against the pinned build.
  * WHY: the native base-mode click handler (RVA 0x1264ba0) calls AddToSelection *and* SetSelected on a hit, and does
  * NOTHING at all on an empty-space miss. So an empty click only deselects because the editor is in state 2; a
  * selection pushed via add_to_selection alone leaves +0x1ac == 1, the editor believes nothing is selected, and the
  * miss path correctly does nothing -- the long-standing "list selection won't native-deselect" bug. Same root cause
- * as Delete-not-deleting-all and Move soft-locking on a list-driven selection. DIRECT (doom-re campaign
- * native-click-deselect, 2026-07-27); empirically corroborated: a native click on top of a list-driven selection
+ * as Delete-not-deleting-all and Move soft-locking on a list-driven selection. DIRECT (our own
+ * reverse-engineering, 2026-07-27); empirically corroborated: a native click on top of a list-driven selection
  * sets +0x1ac = 2 and every one of those symptoms clears.
  * RE-DERIVE per build: decompile the editor's OnDeactivate (it self-identifies via
  * "idSnapEditorLocal::OnDeactivate - User is quitting SnapEditor.") -- it types the editor as longlong* and calls
@@ -103,7 +112,7 @@
  * each saved record onto the wrong entity -- swapping entity pointers in the live map. Observed live:
  * duplicated entities, entities vanishing from the map entirely, "(no module)", and hard freezes.
  * PRE-EXISTING engine behaviour, reproduced on the v0.2.1-beta.2 release which has none of this file's
- * selection-state work. Tracked in the doom-re campaign `cancel-selection-escape-path`. */
+ * selection-state work. Tracked separately as an open engine-side issue. */
 #define MAP_ENT_LAYER_ARR_OFF  0x6f0        /* mapObj+0x6f0 -> int* per-entity layer/module index */
 #define MAP_SCRATCH_LAYER_OFF  0x758        /* mapObj+0x758 -> int, the scratch/working layer id */
 /* the loaded-map MODULE table -- for the OG Entities-list id-string "<modidx>_<modname>/<inherit>_<id>" (port of

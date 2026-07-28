@@ -817,7 +817,7 @@ static void poc_apply_load_prefab()
      * Re-enable by setting this back to 2 once the deserialized prefab matches CreatePrefab's output. */
     sh_apply_item it; it.kind = 1; it.id = 0; it.text = body.c_str();
     g_load_result = poc_apply_edit_seh(&it, 1, "load-prefab");
-    char l[300]; _snprintf_s(l, sizeof l, _TRUNCATE, "load-prefab: name='%s' scheduled=%d (place result reported by the drain)",
+    char l[300]; _snprintf_s(l, sizeof l, _TRUNCATE, "load-prefab: name='%s' staged=%d (kind=1: staged only, user presses Ctrl+V)",
                              g_load_prefab_name.c_str(), g_load_result);
     poc_log(l);
 }
