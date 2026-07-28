@@ -105,8 +105,24 @@ static void iface_unregister_cmd(sh_iface *self, const char *name)
  * C without the engine's fault surface; a handler fault here would already be the SnapStack op's concern
  * (op execution wraps it). There are no producers yet, so the queue is always empty -- this just
  * proves the drain is wired + callable from the frontend's think-loop. */
+/* Optional backend-side per-tick housekeeping, registered at install time. A REGISTERED HOOK, not an
+ * extern call: this file is shared ABI and is also compiled standalone into the C unit tests, which link
+ * none of the backend's engine layer -- an `extern void sh_apply_prefab_poll_play(void)` here builds fine
+ * in the DLL and fails the test binaries with LNK2019. NULL unless the backend sets it, so the tests link
+ * clean and the drain stays a no-op for anyone who does not register one.
+ * The backend currently uses it to re-initialise a prefab staging slot that a Play round-trip would leave
+ * dangling. The drain is the one thing the frontend calls on every think-loop tick, which is the cadence
+ * that needs. */
+static void (*g_tick_hook)(void) = NULL;
+
+void sh_iface_set_tick_hook(void (*fn)(void))
+{
+    g_tick_hook = fn;
+}
+
 static void iface_drain_work_queue(sh_iface *self)
 {
+    if (g_tick_hook) g_tick_hook();
     if (!self || !self->sub) return;
     sub_impl *si = (sub_impl *)self->sub;
     sh_iface_sub *sub = &si->pinned;
@@ -295,6 +311,7 @@ void sh_iface_bind_engine_slots(const sh_iface_engine_slots *s)
     g_iface_vtbl_live.push_to_stack          = s->push_to_stack;          /* +0x2A0 */
     /* clone-extension (empty the backend-owned SnapStack stack; out-of-process frontends only). */
     g_iface_vtbl_live.clear_stack            = s->clear_stack;            /* +0x2A8 */
+    g_iface_vtbl_live.manipulation_in_progress = s->manipulation_in_progress; /* +0x2C0 */
 }
 
 /* --------------------------------------------------------------------- the factory -----------------

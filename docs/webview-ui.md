@@ -62,6 +62,8 @@ The frontend holds no engine addresses; it calls the backend only through the vt
 | Installed version readout | reads `%LOCALAPPDATA%\snapmap-plus\install.json` (written by the installer) |
 | Persistent settings (Light / Dark and Entities controls) | `config_get_json` +0x2B0, `config_set_json` +0x2B8 — registered UTF-8 JSON fragments owned by the backend |
 | Deselect (explicit button, "Select in 3D editor" mode) | `clear_selection` +0x148 |
+| List-driven selections behave natively (empty-space click deselects; Delete / Move / bottom-bar controls all apply) | `add_to_selection` +0x138, `clear_selection` +0x148 and `remove_from_selection` +0x130 additionally sync the editor's EntityMode selection-state field (`editor+0x22330`, state `+0x1ac`, dirty `+0xBB8`) -- the field the engine's own empty-space-click handler consults. Direct SEH-guarded field writes, gated on the editor already being in EntityMode. Re-derive recipe at the constant block in `src/backend/iface_engine.c`. |
+| Entities list clears its highlight on a native deselect ("Select in 3D" mode) | the existing `selCount` broadcast (`get_selection` +0x150, ~330 ms poll); the UI now acts on its >0 -> 0 transition |
 | Live "Create from selection (N)" button count | `get_selection` +0x150, polled every ~330 ms independent of the sync checkboxes |
 | Prefabs list, detail pane, delete/rename, folders (create/rename/delete/move) | `resolve_prefab_path` +0xc0 only -- pure Win32 file/directory ops (`FindFirstFileA`, `DeleteFileA`, `MoveFileA`, `CreateDirectoryA`, `RemoveDirectoryA`) on the resolved path. No other engine slot involved, unaffected by the +0xb0 issues below. |
 | Create from selection | `serialize_selection` +0xb0 |
@@ -111,6 +113,115 @@ through it).
 
 Newest first. Each dated entry covers one working session's worth of change; the undated **Baseline**
 entry at the bottom is the original POC buildout, before this doc tracked dates per entry.
+
+### 2026-07-27 -- Selection changes refused while the editor is holding something
+
+- **Selecting from the Entities list is now refused while you are grabbing an entity or holding a
+  staged prefab**, with a toast: *"Place or cancel what you are holding in the 3D view first, then
+  select"*. The list highlight rolls back so the UI never claims a selection the editor didn't take.
+- **Why.** The engine captures a snapshot of the selection when a manipulation starts, and its
+  cancel path (Escape) restores that snapshot **indexed positionally against the live selection
+  array**, with no re-validation. Change the selection in between and Escape writes each saved record
+  onto the wrong entity -- swapping entity pointers inside the live map. Observed live: duplicated
+  entities, entities vanishing from the map entirely, "(no module)", and hard freezes. The capture
+  also stashes each entity's real layer/module index, which is why the module association is what
+  visibly breaks.
+- **This is a pre-existing engine bug, not a regression.** It reproduces on the v0.2.1-beta.2
+  release, which has none of the selection-state work. Only *cancellation* triggers it -- accept
+  paths (mouse click, controller accept, space) are unaffected.
+- **Detection** is the capture's own side effect: it moves the manipulated entities onto the editor's
+  scratch layer, so "any selected entity is on the scratch layer" is a precise test for "a snapshot is
+  outstanding". Enforced in the backend across `add_to_selection`, `clear_selection` and
+  `remove_from_selection`, and fails closed -- an unreadable editor is treated as in-progress.
+  Exposed to frontends as vtable ext 11 (`manipulation_in_progress`, +0x2C0) so the UI can explain the
+  refusal rather than silently doing nothing.
+- Deliberately NOT keyed off the "currently held" indicator: placing a **new** entity from the palette
+  sets that indicator but captures no snapshot, and is provably safe (Escape behaves correctly there).
+  Keying off it would have blocked a state that never needed blocking.
+- Unaffected: native click select/deselect, Create-from-selection's own "hover one of the selected
+  entities" requirement, and selecting *before* grabbing (the list-assembled group grab).
+- Known cosmetic issue, not addressed: while an entity is grabbed, the other selected entities render
+  in the move/grab colour rather than the normal selection colour.
+
+### 2026-07-27 -- Native 3D-viewport deselect fixed at the root
+
+- **A selection pushed from the Entities list now behaves exactly like a native one.** Empty-space click
+  deselects it, Delete deletes all of it, Move works, and every bottom-bar control applies -- for single
+  and multi-entity selections, and when switching between entities. Previously only the explicit
+  **Deselect** button worked, and Delete/Move misbehaved (Move could soft-lock the game).
+- **Root cause** (reverse-engineered in the companion doom-re project, campaign `native-click-deselect`):
+  the editor keeps a per-mode object inline in the editor object, and its state field says whether
+  anything is selected. The native click handler sets that field on a successful hit *and* adds to the
+  selection array; on an empty-space miss it deliberately does nothing at all. So an empty click only
+  deselects because the editor is in the "something is selected" state. `add_to_selection` wrote the
+  array only, leaving the editor believing nothing was selected -- so the miss path correctly did
+  nothing. That one inconsistency explains every symptom, including Delete and Move, which were never
+  separate bugs. It also explains the old workaround (clicking one of the already-selected entities in
+  the 3D view runs the native hit path, which sets the state regardless of how the selection was made).
+- **Fix:** `src/backend/iface_engine.c` now syncs that mode state alongside every selection-array write --
+  `add_to_selection` -> "selected", `clear_selection` -> "idle", and `remove_from_selection` -> "idle"
+  only once the selection is empty (so a full Delete can't leave the inverse inconsistency). All writes
+  are SEH-guarded and gated on the editor already being in EntityMode, matching the file's existing
+  conventions. The offsets and the per-build re-derive recipe are documented at the constant block.
+- **List sync:** deselecting natively in the 3D view now clears the Entities-list highlight too, in
+  "Select in 3D" mode. The backend already broadcast the live editor selection count on every change;
+  the UI simply wasn't acting on it reaching zero. Gated to that mode only ("Follow selection" already
+  mirrors the whole editor selection, and with both off the list selection is local), to a real
+  greater-than-zero-to-zero transition, and to the case where the list actually has a highlight.
+- The **Deselect** button is kept -- it saves a trip back to the 3D view and stays useful if the mode
+  state is ever out of sync -- but its tooltip no longer describes the (now fixed) stuck behavior.
+- **The mode-state write is guarded to idle/selected only.** That field is not a two-value flag: the
+  engine drives it to other values while a manipulation is in flight (grabbing an entity, holding a
+  staged prefab) and for sub-screens and the logic sub-mode, and it has its own "is the mode busy"
+  predicate. An unconditional write tore the editor out of the gesture mid-manipulation so its
+  completion bookkeeping never ran -- caught in testing as the held object being dropped and
+  permanently losing its module association. `mode_set_selection_state()` now reads the current value
+  and only ever moves between idle and selected. Consequence, accepted deliberately: in a mode outside
+  that pair with nothing selected, the sync sits out and that mode keeps the old (pre-fix) behavior --
+  strictly better than risking editor state.
+- Side effect of the guard, and a nice one: because a manipulation is no longer interrupted, you can
+  hold a grabbed entity or a staged prefab, push a selection from the Entities list, place the held
+  object, and still have your selection. Minor known inconsistency, not considered a problem: after
+  placing, a prefab leaves the pushed selection highlighted while a pre-existing-entity grab clears it.
+- **New capability that falls out of this: list-assembled group grab.** With a selection pushed from
+  the Entities list, grabbing any one of the selected entities in the 3D view grabs *all* of them.
+  There was no way to do this before. It makes a practical workflow possible: browse a logic chain in
+  the 3D view, find the other entities you want to bring along in the Entities list, include them in
+  the selection, then grab the logic-chain node you are on and move the whole group together.
+  Confirmed working in logic chain mode, which also means that mode is inside the idle/selected pair
+  the guard permits -- the earlier worry that the logic sub-mode might sit outside it did not
+  materialise.
+- Known remaining gap: if you have one entity selected from the list and then natively click a
+  *different* one, the selection count is unchanged, so no broadcast fires and the list keeps
+  highlighting the original. Fixing that means broadcasting selection identity, not just count, in
+  "Select in 3D" mode.
+
+### 2026-07-27 -- Keyboard paging for every list and dropdown; built-in filter entities hidden
+
+- **ArrowUp/ArrowDown now page the Entities, Timelines and Prefabs lists.** Moving the highlight
+  selects the row, exactly as clicking it does (Timelines also opens it; Prefabs also loads its
+  detail card), and the row is scrolled into view. With no current selection, ArrowDown lands on the
+  first row and ArrowUp on the last.
+  The Entities and Prefabs handlers are scoped to the **document**, not to their filter box: "Follow
+  selection" mode drives the Entities list purely from the live 3D-editor pick, so the user may never
+  click into the filter box or a row at all, and a listener scoped to one input would never fire.
+  Excluded from both: the Entity State editor (`#editor` -- its decl textarea needs real caret
+  movement), the Prefab Details card (`#prefabCard` -- same, for the description textarea), an
+  in-progress folder rename, and any `.combo` input (those have their own arrow handling, below).
+- **The Inherit / Classname combos and the Timelines "Runs on" entity picker page their dropdowns.**
+  Arrow keys move a highlighted option, Enter accepts it, and -- unlike the lists -- this only applies
+  **while the dropdown is open**, so arrows are free for normal use otherwise. Typing still filters;
+  paging a narrowed list re-renders against the current text rather than snapping back to the full
+  set. The highlight reuses `.combo-opt`'s existing hover styling via a new `.active` class.
+- **SnapMap's own built-in filter/droppable helper entities are excluded from every entity list and
+  picker** (`renderList`, the "Runs on" picker, and the per-event entity-arg dropdown). These are the
+  engine-seeded prefilters and droppable slots (`any player` / `any ai`, per-team/player/race,
+  keycards, flags, power cores) -- dev-layer-only, never placed or edited by a mapper, and previously
+  they buried the real entities whenever Show Hidden was on.
+  Matched by the id **starting with** `snapmaps/filter/`, not containing it: a mapper's own filter
+  always carries its map/module path first (e.g. `0_c_ind_cross/snapmaps/filter/ai_151`), so
+  user-placed filters are unaffected. The `" (no module)"` suffix is deliberately NOT used as the
+  signal -- it also appears on any real entity not yet assigned to a module.
 
 ### 2026-07-23 -- Persistent Entities controls
 
@@ -600,10 +711,10 @@ that doc for the write-up.
 - Default window size bumped to 1440x900 (from 1040x720) so the Entities and Prefabs tabs fit without a
   manual resize on first launch.
 - Explicit **Deselect** button next to "Select in 3D editor" (only visible while that mode is on): calls
-  `clear_selection` directly. A native click on empty space in the 3D view doesn't clear a selection that
-  was set via `add_to_selection` (confirmed: a purely native selection deselects fine on its own -- only
-  our externally-driven selection gets stuck), and the root cause is unRE'd in this codebase, so this is a
-  reliable escape hatch rather than a fix for the underlying click behavior.
+  `clear_selection` directly. Added here as a workaround, because at the time a native empty-space click
+  would not clear a list-driven selection. That root cause was reverse-engineered and fixed on
+  2026-07-27 (see the entry at the top of this changelog); the button remains, now purely as a
+  convenience and as the escape hatch if the editor mode state is ever out of sync.
 - **Prefabs tab, wired to the real filesystem** (`%LOCALAPPDATA%\snapmap-plus\prefabs\`) -- no fake/mockup data:
   - Live list of real `.json` prefab files, refreshed from disk on every Prefabs-tab click; an empty-state
     message when there are none yet.

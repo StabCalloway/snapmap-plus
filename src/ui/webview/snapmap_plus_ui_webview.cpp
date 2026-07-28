@@ -79,7 +79,8 @@ static std::vector<int> g_delete_eids;
 
 static volatile bool g_pending_select = false;   /* list -> editor selection push ("Select in editor") */
 static std::vector<int> g_select_eids;
-static volatile bool g_pending_deselect = false;  /* explicit "Deselect" button -- clear_selection escape hatch */
+static volatile bool g_pending_deselect = false;  /* explicit "Deselect" button -- clear_selection convenience */
+static volatile bool g_select_refused   = false;  /* last selection push was refused (editor mid-grab/hold) */
 static char g_enumbuf[262144];                   /* packed-string scratch for enum_inherits / enum_valid_classes */
 
 static volatile bool g_cam_lock = false;         /* Camera Origin "Lock Position" */
@@ -559,6 +560,17 @@ static void poc_emit_entity_inherit(int eid, int json_len)
 static void poc_apply_select_in_editor()
 {
     poc_logf("select-in-editor: apply start ids=%lu", (unsigned long)g_select_eids.size());
+    /* Refused while the editor is grabbing/holding: the engine's Escape/cancel path restores a snapshot
+     * indexed positionally against the live selection array, so changing that array mid-manipulation
+     * makes Escape swap entity pointers into the wrong slots -- duplicated entities, entities deleted
+     * outright, freezes. Pre-existing engine behaviour (reproduced on v0.2.1-beta.2). The backend
+     * enforces this too; checking here as well lets us tell the user why nothing happened. */
+    if (g_iface && g_iface->vtbl && g_iface->vtbl->manipulation_in_progress
+        && g_iface->vtbl->manipulation_in_progress(g_iface)) {
+        poc_log("select-in-editor: REFUSED -- editor is mid-manipulation (grab/hold)");
+        g_select_refused = true;
+        return;
+    }
     __try {
         if (g_iface && g_iface->vtbl) {
             if (g_iface->vtbl->clear_selection) { poc_log("select-in-editor: clear"); g_iface->vtbl->clear_selection(g_iface); }
@@ -574,9 +586,11 @@ static void poc_apply_select_in_editor()
     } __except (EXCEPTION_EXECUTE_HANDLER) { poc_log("select-in-editor: SEH in apply"); }
     poc_log("select-in-editor: apply done");
 }
-/* explicit Deselect: clear_selection only, no re-add. A reliable escape hatch since a native click on
- * empty space doesn't clear a selection that was set via add_to_selection (confirmed: native click/drag
- * selection deselects fine on its own -- only our externally-driven selection gets stuck). */
+/* explicit Deselect: clear_selection only, no re-add. A convenience (deselect without going back to the 3D
+ * view) and the escape hatch if the editor's mode state is ever out of sync. NB: this button used to be the
+ * ONLY way to clear a list-driven selection -- a native empty-space click wouldn't do it. That root cause was
+ * found and fixed 2026-07-27 (iface_engine.c syncs the EntityMode selection state alongside the selection
+ * array; see ED_MODE_OBJ_OFF there), so a native click now deselects normally. */
 static void poc_apply_deselect()
 {
     __try {
@@ -776,11 +790,35 @@ static void poc_apply_load_prefab()
     fclose(fp);
     if (body.empty()) { poc_log("load-prefab: ABORT (empty file)"); return; }
 
+    /* Clear first: PasteInstantiate uses the selection array as its old->new id map and AddToSelection
+     * APPENDS, so instantiating with a live selection silently mis-wires every pasted connection. The
+     * backend re-verifies this immediately before placing (the clear can legitimately be refused while a
+     * manipulation snapshot is outstanding) and falls back to stage-only rather than risk it. */
     poc_clear_selection_seh();
 
+    /* kind=2 = stage THEN place -- runs the engine's own paste pair (PasteInstantiate + the Add-Prefab
+     * grab transition), the exact sequence its Ctrl+V branch runs, so the user no longer has to press
+     * Ctrl+V in the 3D view. Deferred (not sync) on purpose: the place MUST happen on the DOOM main
+     * thread, which is where the clone_bss_apply drain runs it. If anything is unavailable -- sig
+     * unresolved, not in EntityMode, selection not empty -- it degrades to the old stage-only behaviour
+     * and the toast says so; there is no half-placed outcome. */
+    /* TEMPORARILY BACK TO kind=1 (stage-only). kind=2 (stage + auto pick-up) is implemented and its
+     * mechanism is proven -- action injection reaches the engine's own paste branch and the first-press
+     * grab works -- but it is DISABLED because the prefab we stage is not structurally equivalent to one
+     * the engine's own CreatePrefab builds. Established live 2026-07-27/28:
+     *   - a vanilla Ctrl+C clipboard survives Play, survives a fresh post-Play copy, and repeat-pastes
+     *     forever with zero faults (clean control run, Load/Place never pressed);
+     *   - with OUR prefab in the slot: Ctrl+V pastes nothing, Ctrl+C faults inside the engine's
+     *     lexer/string free (0x1ab32ee) while CreatePrefab tears the slot down, and repeated pastes end
+     *     in "Memory corruption before block!".
+     * One paste works and it degrades from there, which points at the object our deserialize builds --
+     * not at the call site, and not at a Play-lifetime issue (the map object survives the round-trip, so
+     * neither the session-null nor the map-pointer teardown detector ever fired).
+     * Re-enable by setting this back to 2 once the deserialized prefab matches CreatePrefab's output. */
     sh_apply_item it; it.kind = 1; it.id = 0; it.text = body.c_str();
     g_load_result = poc_apply_edit_seh(&it, 1, "load-prefab");
-    char l[300]; _snprintf_s(l, sizeof l, _TRUNCATE, "load-prefab: name='%s' staged=%d", g_load_prefab_name.c_str(), g_load_result);
+    char l[300]; _snprintf_s(l, sizeof l, _TRUNCATE, "load-prefab: name='%s' scheduled=%d (place result reported by the drain)",
+                             g_load_prefab_name.c_str(), g_load_result);
     poc_log(l);
 }
 /* Timelines Stage 5 (Save): kind=0 (deserialize the FULL patched entity JSON -> temp def -> commit
@@ -1968,7 +2006,7 @@ static void poc_think_loop()
     unsigned frame = 0;
     for (;;) {
         frame++;
-        bool did_save = false, did_delete = false, did_create_prefab = false;
+        bool did_save = false, did_delete = false, did_create_prefab = false, did_select_refused = false;
         bool did_delete_prefab = false, did_rename_prefab = false, did_load_prefab = false;
         bool did_create_folder = false, did_rename_folder = false, did_delete_folder = false, did_move_prefab = false;
         bool did_open_timeline = false, did_resolve_entity = false, did_save_timeline = false;
@@ -1988,6 +2026,7 @@ static void poc_think_loop()
             g_last_editor_sel = -1; g_last_sel_sig = 0;
             g_pending_deselect = false;
         }
+        if (g_select_refused) { g_select_refused = false; did_select_refused = true; }
         if (g_pending_create_prefab) {
             poc_apply_create_prefab();
             g_pending_create_prefab = false;
@@ -2014,6 +2053,7 @@ static void poc_think_loop()
             if (g_save_eid >= 0) poc_send_state(g_save_eid, false);
         }
         if (did_delete) poc_send_list();
+        if (did_select_refused) poc_post_json(L"{\"kind\":\"selectRefused\"}");
         if (did_create_prefab) {
             std::wstring m = L"{\"kind\":\"createPrefabResult\",\"result\":"; m += std::to_wstring(g_create_result);
             m += L",\"name\":\""; m += poc_json_w(g_create_prefab_name.c_str()); m += L"\"}";

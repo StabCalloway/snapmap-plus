@@ -61,11 +61,51 @@
                                             * Create-New-Timeline gate (the feature spawns/morphs a timeline host,
                                             * valid ONLY while tabbed inside a module). RE-DERIVE per build via the
                                             * state-machine recipe. */
+/* the EntityMode object + its selection state -- the native-click-deselect fix. The engine keeps a per-editor-state
+ * mode object INLINE in the editor; GetMode(editor, stateId) (engine RVA 0x1183c40 on this build) is a plain switch
+ * returning editor+OFF, and `case 2:` (EntityMode, i.e. ED_ENTITY_MODE_OFF == 2) returns editor+0x22330. Its +0x1ac
+ * is a small state enum: 1 = base/idle (nothing selected), 2 = an entity IS selected; +0xBB8 is the redraw/dirty
+ * flag. The engine's own setters are one-liners -- SetSelected (RVA 0x1255120) is `{mode+0x1ac = 2; mode+0xBB8 = 1;}`
+ * and SetIdle (RVA 0x1255100) is the same with 1 -- so we replicate the writes DIRECT rather than resolve two
+ * trivial functions. NB: these RVAs are documentation for the re-derive only, never resolved at runtime -- and note
+ * this file's older AddToSelection/ClearSelection RVAs (0x59f210/0x59fa00) were PROVEN STALE by the same campaign
+ * (the real offsets on this build are 0x11fad50/0x11fb540), which is exactly why they resolve by signature.
+ * WHY: the native base-mode click handler (RVA 0x1264ba0) calls AddToSelection *and* SetSelected on a hit, and does
+ * NOTHING at all on an empty-space miss. So an empty click only deselects because the editor is in state 2; a
+ * selection pushed via add_to_selection alone leaves +0x1ac == 1, the editor believes nothing is selected, and the
+ * miss path correctly does nothing -- the long-standing "list selection won't native-deselect" bug. Same root cause
+ * as Delete-not-deleting-all and Move soft-locking on a list-driven selection. DIRECT (doom-re campaign
+ * native-click-deselect, 2026-07-27); empirically corroborated: a native click on top of a list-driven selection
+ * sets +0x1ac = 2 and every one of those symptoms clears.
+ * RE-DERIVE per build: decompile the editor's OnDeactivate (it self-identifies via
+ * "idSnapEditorLocal::OnDeactivate - User is quitting SnapEditor.") -- it types the editor as longlong* and calls
+ * SetIdle(editor + 0x4466) => 0x4466*8 = 0x22330. Cross-check the index math in that same function against the
+ * offsets we already trust: editor[0x409a] == ED_SEL_OBJ_OFF and editor[0x4211] == ED_SCREEN_OFF. */
+#define ED_MODE_OBJ_OFF        0x22330      /* editor+0x22330 -> inline EntityMode object (= GetMode(editor, 2)) */
+#define MODE_SEL_STATE_OFF     0x1ac        /* mode+0x1ac -> 1 = idle/nothing selected, 2 = an entity is selected */
+#define MODE_DIRTY_OFF         0xBB8        /* mode+0xBB8 -> redraw/dirty flag (set alongside every state write) */
+#define MODE_STATE_IDLE        1
+#define MODE_STATE_SELECTED    2
+
 #define SEL_IDS_OFF            0x80         /* selObj+0x80 -> int* selected ids */
 #define SEL_COUNT_OFF          0x88         /* selObj+0x88 -> int selected count */
 #define SEL_HOVERED_OFF        0x2c         /* selObj+0x2c -> looked-at/hovered entity id */
 #define ARR_ENT_ARRAY_OFF      0x6a0        /* arrObj+0x6a0 -> entity-ptr array (8-byte entries) */
 #define ARR_ENT_COUNT_OFF      0x6a8        /* arrObj+0x6a8 -> entity count (u32) */
+/* per-entity layer index + the editor's scratch/working layer -- the "is a manipulation in progress?"
+ * test. When the user grabs (or holds a staged prefab), the engine's snapshot-capture moves every
+ * selected entity onto the scratch layer and stashes its REAL layer in a snapshot record, restoring it
+ * on cancel. So "a selected entity currently sits on the scratch layer" == "a manipulation snapshot is
+ * outstanding". DIRECT: capture is engine RVA 0x11b08d0, which reads `*(int*)(mapObj+0x6f0 + id*4)` per
+ * entity and compares it against `*(int*)(mapObj+0x758)`, calling the layer setter when they differ.
+ * WHY WE CARE: that snapshot is indexed POSITIONALLY against the live selection array and is never
+ * re-validated, so mutating the selection while it is outstanding makes the cancel path (Escape) write
+ * each saved record onto the wrong entity -- swapping entity pointers in the live map. Observed live:
+ * duplicated entities, entities vanishing from the map entirely, "(no module)", and hard freezes.
+ * PRE-EXISTING engine behaviour, reproduced on the v0.2.1-beta.2 release which has none of this file's
+ * selection-state work. Tracked in the doom-re campaign `cancel-selection-escape-path`. */
+#define MAP_ENT_LAYER_ARR_OFF  0x6f0        /* mapObj+0x6f0 -> int* per-entity layer/module index */
+#define MAP_SCRATCH_LAYER_OFF  0x758        /* mapObj+0x758 -> int, the scratch/working layer id */
 /* the loaded-map MODULE table -- for the OG Entities-list id-string "<modidx>_<modname>/<inherit>_<id>" (port of
  * FUN_180003ba0 + FUN_180003c80). All build-specific (same loaded-map object the entity array lives in; re-derive
  * per build alongside ARR_ENT_*). */
@@ -360,22 +400,114 @@ static int slot_get_selection(sh_iface *self, int *out_ids, int max)
     return written;
 }
 
-/* +0x148 CLEAR selection (psel). */
+/* Sync the EntityMode selection state to match what we just did to the selection ARRAY -- the native-click-deselect
+ * fix (see ED_MODE_OBJ_OFF). The engine's empty-space-click handler does nothing unless the mode is in the
+ * "something is selected" state, so a selection we push has to announce itself the same way a native click does.
+ * Gated on ED_ENTITY_MODE_OFF == 2 (tabbed inside a module) because that is precisely the state for which
+ * editor+0x22330 is the live mode object; anywhere else the write would land on an inactive sub-object.
+ * SEH-guarded like every other editor deref here: a shifted offset degrades to a clean no-op. */
+/* Is a manipulation snapshot outstanding? (see MAP_ENT_LAYER_ARR_OFF for the full rationale)
+ *
+ * True while the user is grabbing/moving entities or holding a staged prefab. Callers must NOT mutate
+ * the editor selection while this is true: the engine's cancel path restores a positionally-indexed
+ * snapshot against the live selection array, so changing that array corrupts the map on Escape.
+ *
+ * Implemented as "does any currently-selected entity sit on the scratch layer", which is exactly what
+ * the engine's snapshot-capture arranges. Fails CLOSED on any read error -- an unreadable editor is
+ * treated as "in progress" so we refuse rather than risk the corrupting path. */
+static int manipulation_in_progress(void)
+{
+    const uint8_t *ed = editor_session();
+    if (!ed) return 1;                       /* can't tell -> refuse */
+    void *mapObj = NULL, *sel = NULL;
+    if (!ie_read_ptr(ed + ED_MAP_OBJ_OFF, &mapObj) || !mapObj) return 1;
+    if (!ie_read_ptr(ed + ED_SEL_OBJ_OFF, &sel) || !sel) return 0;   /* no selection -> nothing at risk */
+
+    int count = 0;
+    if (!ie_read_s32((const uint8_t *)sel + SEL_COUNT_OFF, &count)) return 1;
+    if (count <= 0) return 0;                /* empty selection -> no snapshot can be keyed to it */
+    if (count > SEL_MAX_IDS) return 1;       /* implausible -> refuse */
+
+    void *ids = NULL, *layers = NULL;
+    if (!ie_read_ptr((const uint8_t *)sel + SEL_IDS_OFF, &ids) || !ids) return 1;
+    if (!ie_read_ptr((const uint8_t *)mapObj + MAP_ENT_LAYER_ARR_OFF, &layers) || !layers) return 1;
+    int scratch = 0;
+    if (!ie_read_s32((const uint8_t *)mapObj + MAP_SCRATCH_LAYER_OFF, &scratch)) return 1;
+
+    for (int i = 0; i < count; i++) {
+        uint32_t id = 0;
+        if (!ie_read_u32((const uint8_t *)ids + (size_t)i * 4, &id)) return 1;
+        int layer = 0;
+        if (!ie_read_s32((const uint8_t *)layers + (size_t)id * 4, &layer)) return 1;
+        if (layer == scratch) return 1;      /* mid-manipulation */
+    }
+    return 0;
+}
+
+/* +0x2C0 (ext 11) query: 1 while the editor is grabbing/holding, so the UI can refuse and explain
+ * rather than silently no-op. Exposed because the refusal is a user-visible restriction, not an
+ * internal detail. */
+static int slot_manipulation_in_progress(sh_iface *self)
+{
+    (void)self;
+    return manipulation_in_progress() ? 1 : 0;
+}
+
+static void mode_set_selection_state(int state)
+{
+    const uint8_t *ed = editor_session();
+    if (!ed) return;
+    int editor_state = 0;
+    if (!ie_read_s32(ed + ED_ENTITY_MODE_OFF, &editor_state)) return;
+    if (editor_state != 2) return;              /* not EntityMode -> +0x22330 isn't the active mode object */
+
+    /* NEVER stomp a state we don't recognise. mode+0x1ac is not a two-value flag: the engine drives it
+     * to other values while a manipulation is in flight (grabbing/moving an entity, holding a staged
+     * prefab awaiting placement) and while sub-screens are up, and it has its own "is the mode busy"
+     * predicate (engine RVA 0x1254e20, literally `return mode+0x1ac != 1`). Overwriting one of those
+     * mid-gesture tears the editor out of the manipulation so its completion bookkeeping never runs --
+     * observed live 2026-07-27 as the grabbed entity (or held prefab) being dropped and losing its
+     * module association, unrecoverable by a list refresh. So only ever move between idle and selected,
+     * and leave every other value strictly alone. */
+    int cur = 0;
+    if (!ie_read_s32(ed + ED_MODE_OBJ_OFF + MODE_SEL_STATE_OFF, &cur)) return;
+    if (cur != MODE_STATE_IDLE && cur != MODE_STATE_SELECTED) return;   /* busy -> hands off */
+    if (cur == state) return;                                           /* already there -> no write */
+
+    __try {
+        *(int *)((uintptr_t)ed + ED_MODE_OBJ_OFF + MODE_SEL_STATE_OFF) = state;
+        *(uint8_t *)((uintptr_t)ed + ED_MODE_OBJ_OFF + MODE_DIRTY_OFF) = 1;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
+/* +0x148 CLEAR selection (psel). Also drops the mode back to idle so the editor doesn't keep believing something is
+ * selected after a programmatic clear (empty array + idle is the consistent pairing -- it is what makes the
+ * Deselect button leave the editor immediately usable natively). */
 static void slot_clear_selection(sh_iface *self)
 {
     (void)self;
+    /* HARD SAFETY GATE -- see MAP_ENT_LAYER_ARR_OFF. Mutating the selection while the editor holds a
+     * manipulation snapshot corrupts the live map on the next Escape (entity pointers swapped into the
+     * wrong slots: duplicated entities, entities deleted outright, freezes). Pre-existing engine
+     * behaviour; refusing is the only safe option until the cancel path itself is fixed. */
+    if (manipulation_in_progress()) return;
     void *sel = selection_object();
     if (!sel || !g_clear_sel) return;
     __try { g_clear_sel(sel); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    mode_set_selection_state(MODE_STATE_IDLE);
 }
 
-/* +0x138 ADD to selection (popsel). */
+/* +0x138 ADD to selection (popsel). Also puts the mode into the "selected" state, exactly as the native click
+ * handler does after a successful hit -- without this the pushed selection is invisible to the editor's own
+ * empty-space-click / Delete / Move logic. */
 static void slot_add_to_selection(sh_iface *self, int id)
 {
     (void)self;
+    if (manipulation_in_progress()) return;   /* see slot_clear_selection */
     void *sel = selection_object();
     if (!sel || !g_add_sel) return;
     __try { g_add_sel(sel, id); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    mode_set_selection_state(MODE_STATE_SELECTED);
 }
 
 /* +0x198 hovered id (phov): selObj+0x2c. <0 / fault -> -1. */
@@ -770,16 +902,22 @@ static void slot_rebuild_declsource(sh_iface *self, int id, const char *cstr)
 }
 
 /* +0x130 REMOVE id from selection (Entities ctx-menu Delete): gated on editor+0x204d0 != 0 && id != -1.
- * OG FUN_1800073c0 -> engine 0x59fda0 (RemoveFromSelection). */
+ * OG FUN_1800073c0 -> engine 0x59fda0 (RemoveFromSelection).
+ * Drops the mode back to idle once the removal empties the selection -- the mirror of the add/clear sync, so the
+ * editor is never left believing something is selected over an empty array (see ED_MODE_OBJ_OFF). */
 static void slot_remove_from_selection(sh_iface *self, int id)
 {
     (void)self;
     if (!g_remove_sel || id == -1) return;
+    if (manipulation_in_progress()) return;   /* see slot_clear_selection */
     const uint8_t *ed = editor_session();
     if (!ed) return;
     void *sel = NULL;
     if (!ie_read_ptr(ed + ED_SEL_OBJ_OFF_C3, &sel) || sel == NULL) return;
     __try { g_remove_sel(sel, id); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    int remaining = 0;
+    if (ie_read_s32((const uint8_t *)sel + SEL_COUNT_OFF, &remaining) && remaining <= 0)
+        mode_set_selection_state(MODE_STATE_IDLE);
 }
 
 /* +0x110 ENUMERATE the decls of a resource class (the Timeline-Editor constrained decl-comboboxes). The
@@ -1103,6 +1241,9 @@ int sh_iface_engine_install(const sig_result *results, size_t n, const uint8_t *
     slots.push_to_stack          = slot_push_to_stack;        /* +0x2A0 ext 7 */
     /* clone-extension: empty the backend-owned SnapStack stack (out-of-process frontends only). */
     slots.clear_stack            = slot_clear_stack;          /* +0x2A8 ext 8 */
+    /* clone-extension: "the editor is mid-manipulation" -- every selection mutation is refused while
+     * true, because the engine's Escape/cancel path would then corrupt the live map. */
+    slots.manipulation_in_progress = slot_manipulation_in_progress;  /* +0x2C0 ext 11 */
     sh_iface_bind_engine_slots(&slots);
 
     char line[200];

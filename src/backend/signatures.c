@@ -678,5 +678,129 @@ const sig_entry BACKEND_ENGINE_SIGNATURES[] = {
       "89 B3 A8 02 00 00 48 8D 0D ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 8B 0D ?? ?? ?? ?? "
       "48 85 C9 74 12 66 C7",
       0x5E4C28u },
+    { "SwfTextOnKeyCall",   /* idSWFScriptObject_TextInstancePrototype::idSWFScriptFunction_onKey::Call
+                             * (0x17505e0) -- THE keyboard entry point for a FOCUSED Scaleform text field,
+                             * i.e. every SnapMap free-text property (datapad/transmission bodies, anything
+                             * using the `textinspector`). swf_textedit.c detours it to add the clipboard
+                             * copy/paste vanilla never had: the stock body has no Ctrl branch at all, only
+                             * a shift flag, so there is nothing to unlock.
+                             * ABI: void*(self, sretRetVal, thisObject, parms) -- `thisObject` is the
+                             * "TextField" script object (its +0xC0 = the idSWFTextInstance), `parms` points
+                             * at an idSWFScriptValue[2] = (scancode, isDown).
+                             * Located by RTTI-walking the onKey/onChar script-function classes and diffing
+                             * their 11-slot vtables (slot 10 is the differing `Call` override; onChar's is
+                             * 0x1750500). 63-byte prologue, 4 wildcards = the security-cookie rip-disp.
+                             * Re-derive per DOOM build: decompile it -- the idSWFTextInstance offsets
+                             * swf_textedit.c uses are exactly the constants this function dereferences. */
+      "40 55 56 57 41 56 41 57 48 81 EC D0 00 00 00 48 C7 44 24 28 FE FF FF FF "
+      "48 89 9C 24 00 01 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 84 24 C0 00 00 00 "
+      "49 8B F9 49 8B E8 4C 8B F2 45 33 FF",
+      0x17505E0u },
+    { "IdStrAssignFromStr", /* idStr::operator=(const idStr&) (0x33a380) -- the REAL idStr assignment:
+                             * grows the destination when needed (engine allocator, frees the old heap
+                             * buffer), memcpys, NUL-terminates and writes the new length. This is the
+                             * one the engine's own SWF text-edit backspace/delete path uses to write
+                             * a spliced string back into a live text field, and swf_textedit.c's paste
+                             * uses it the same way.
+                             * NOTE: distinct from this DB's "IdStrAssign" (0x32b3d0), which despite the
+                             * name is an INTERN-AND-STORE-POINTER for decl name fields, not an idStr
+                             * assign -- do not substitute one for the other.
+                             * ABI: void(idStr *dst, const idStr *src). Reads only src's +0x08 len and
+                             * +0x10 data (its +0x18 flags only select a steal/swap fast path, which a
+                             * zeroed flags word declines), so a caller may hand it a stack-built src.
+                             * 27 bytes, 1 wildcard = the build-volatile jz disp8. */
+      "48 89 74 24 18 57 48 83 EC 40 48 8B F2 48 8B F9 8B 49 18 8B D1 C1 EA 1F 80 E2 01 74 ?? "
+      "44 8B 46 18 41 8B C0",
+      0x33A380u },
+    { "PrefabCtor",         /* idSnapEntityPrefab ctor -- idSnapEntityPrefab *(self [rcx]).
+                             * Was a raw base+RVA leaf (`PREFAB_CTOR_RVA`), which is build-locked; this is
+                             * now the primary resolve with that RVA kept only as a fallback. It matters:
+                             * ae_mkcmd_one calls it before every stage AND the Play watchdog calls it to
+                             * re-initialise the staging slot, so a wrong address here corrupts on a timer.
+                             * IDENTIFIED BEHAVIOURALLY, not by arithmetic (on-disk and runtime RVAs differ
+                             * per region on this build, so no delta is reliable): it writes every field
+                             * unconditionally with no reads and no branches -- which is exactly why
+                             * re-ctor'ing a slot with dangling pointers is safe, it leaks rather than
+                             * double-frees -- fills the identity transform from a constants block, zeroes
+                             * each list member (capacity word 0x50000), writes up to +0x118, then makes a
+                             * forward call into a second, larger ctor for the tail sub-object at +0x120.
+                             * That is a field-for-field match to this project's own description of the
+                             * runtime ctor. Unique at 23 bytes; deliberately stopped before the first
+                             * RIP-relative operand so the pattern carries NO build-volatile bytes and
+                             * needs no wildcards.
+                             * Extracted from the on-disk image at 0x11AC8D0; known_rva below is the
+                             * RUNTIME address, because that is the only address space the fallback can
+                             * legitimately be used in. */
+      "4C 8B DC 49 89 4B 08 53 48 83 EC 30 49 C7 43 E8 FE FF FF FF 48 8B D9",
+      0x54D0A0u },
+    { "PrefabPopulate",     /* CreatePrefab -- char(prefab [rcx], editor [rdx], int *outStatus [r8]).
+                             * Fills a prefab from the current editor selection; the Create-from-selection
+                             * (+0xb0) path. Also a former raw base+RVA leaf. Located from its own error
+                             * strings ("Failed to create prefab: not hovering entity in selection." and
+                             * the three siblings), so the identification is anchored on data it prints,
+                             * not on an address delta. 46-byte prologue, fully absolute, unique.
+                             * Extracted on-disk at 0x11ADB30; known_rva is the RUNTIME address. */
+      "40 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 40 F7 FF FF "
+      "48 81 EC C0 09 00 00 48 C7 85 10 01 00 00 FE FF FF FF 48 89 9C 24 18 0A 00 00",
+      0x54E410u },
+    { "PasteInstantiate",   /* idSnapEntityPrefab instantiate -- void(prefab [rcx], editor [rdx]).
+                             * Takes the STAGED prefab at editor+0x209a8 and builds its entities into the
+                             * live map: snapshots the map's nine id-allocation counters, computes a
+                             * camera-relative placement transform from editor+0x170 (camera origin) /
+                             * +0x180 (yaw) against the prefab's own saved yaw, then per entity
+                             * deserializes the blob (stride 0x1b0), registers it, sets its visibility bit
+                             * and calls AddToSelection; finally rebuilds connections + var-refs and sets
+                             * the hovered id to the first new entity.
+                             *
+                             * HARD PRECONDITION -- the selection MUST be empty on entry. The connection/
+                             * var-ref remap translates every stored old index i through
+                             * *(int*)(selObj+0x80 + i*4), i.e. it uses the SELECTION ARRAY as its
+                             * old->new id map, and AddToSelection APPENDS. With a live selection of k the
+                             * remap reads selection[i] instead of selection[k+i], so the pasted entities
+                             * get wired to the pre-existing selected ones and the tail reads run past the
+                             * count -- a map that still loads and is silently mis-wired. The engine never
+                             * hits this because its own paste branch lives in the IDLE sub-state.
+                             *
+                             * The engine's only call site is the idle sub-state dispatcher, on abstract
+                             * action 0x5C, gated on substate+0x41 & 0x40 (= snapEdit_enableCopyPaste != 0
+                             * AND editor+0x209e0 >= 1 AND not hovering an entity). Immediately followed
+                             * there by EnterAddPrefabGrab -- calling this ALONE leaves the placed prefab
+                             * in an inconsistent tool state (the 2026-07-06 "placed but undraggable, then
+                             * AV on the next Play transition" failure).
+                             *
+                             * 40-byte prologue, no wildcards (frame-size + xmm-save shape; no rip-relative
+                             * or rel32 in range). Unique on the pinned build.
+                             * RE-DERIVE per build: byte-search the EnterAddPrefabGrab body below (unique),
+                             * take its sole xref -- that is the paste branch -- and back up 8 bytes from
+                             * that call site (CALL rel32 = 5 + MOV RCX,RBP = 3); the instruction there is
+                             * CALL PasteInstantiate, preceded by LEA RCX,[reg+0x209A8] / MOV RDX,reg.
+                             * DIRECT (doom-re campaign synthetic-action-injection, 2026-07-27). */
+      "48 8B C4 55 56 57 41 54 41 55 41 56 41 57 48 8D A8 A8 F7 FF FF "
+      "48 81 EC 20 09 00 00 48 C7 45 E0 FE FF FF FF 48 89 58 18",
+      0x11AF070u },
+    { "EnterAddPrefabGrab",  /* void(mode) -- the editor-state transition the engine runs IMMEDIATELY after
+                             * PasteInstantiate, on the EntityMode object (editor+0x22330). Puts the mode
+                             * into the "holding an unplaced prefab" manipulation state so the placement is
+                             * draggable and its completion bookkeeping runs on click:
+                             *   mode[0x2d0] &= 0xfb;          clear DUPLICATE flavour
+                             *   mode[0x2d0] |= 0x08;          set ADD-PREFAB flavour
+                             *   mode[0x2d1] |= 0x01;          memo: restore "selected" after placing
+                             *   *(u32*)(mode+0x1ac) = 4;      -> manipulation sub-state
+                             *   mode[0xBB8] = 1;              redraw
+                             * mode+0x2d0/+0x2d1 are the manipulation sub-state's own +0x40/+0x41 flag
+                             * bytes (that sub-object is inline at mode+0x290), which is what the
+                             * place-commit handler reads to pick its "Add Prefab" vs "Duplicate" vs "Edit"
+                             * behaviour -- so the flavour bits are load-bearing, not cosmetic.
+                             * Two siblings differ ONLY in the +0x2d0 mask: &0xf7|0x04 = Duplicate,
+                             * &0xf3 = Edit/Move. Do not confuse them.
+                             *
+                             * The signature is the ENTIRE function body (38 bytes incl. the RET), fully
+                             * absolute -- no wildcards, no relocations. Its first 7 bytes alone are
+                             * already unique in the image, so this is a very strong anchor and is the
+                             * recommended starting point for re-deriving the whole paste path per build.
+                             * DIRECT (doom-re campaign synthetic-action-injection, 2026-07-27). */
+      "80 A1 D0 02 00 00 FB 80 89 D0 02 00 00 08 80 89 D1 02 00 00 01 "
+      "C7 81 AC 01 00 00 04 00 00 00 C6 81 B8 0B 00 00 01 C3",
+      0x1254B80u },
     { NULL, NULL, 0 }   /* terminator */
 };

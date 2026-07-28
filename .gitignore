@@ -17,8 +17,8 @@ dist/
 .claude/
 .codex/
 
-# Personal local-dev convenience script (not for upstream)
-/sync-and-build-webview.ps1
+# Personal local-dev convenience scripts (not for upstream)
+/testScript.ps1
 
 # wrangler's local cache (account metadata -- never commit)
 feedback/.wrangler/
