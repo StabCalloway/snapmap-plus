@@ -11,7 +11,11 @@
 ; so this .def is the SOLE export source -- avoids an LNK4197 double-export). Ordinals are verified against
 ; C:\Windows\System32\XInput1_3.dll (2=GetState 3=SetState 4=GetCapabilities 5=Enable 6=DSound 7=Battery
 ; 8=Keystroke). The OG SnapHak XINPUT1_3.dll had the same alphabetical defect (latent; few used a pad).
+; Non-XInput exports start at 100, well clear of the pinned 2-8 above. DOOM
+; imports those BY ORDINAL, so anything that could renumber them is a heap-
+; corruption bug waiting to happen -- an explicit high ordinal cannot.
 EXPORTS
+    sh_rawmap_swap_is_armed         @100
     XInputGetState                  @2
     XInputSetState                  @3
     XInputGetCapabilities           @4

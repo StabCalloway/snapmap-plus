@@ -220,6 +220,22 @@ int sh_rawmap_swap_arm(int on)
     return on ? 1 : 0;
 }
 
+/* Is the LOAD-swap currently armed? Reports the EXPLICIT arm only.
+ *
+ * Deliberately NOT the same predicate the swap itself uses: that one is
+ * `explicit_armed || flag_file_present()`, because the flag-file is a test
+ * stand-in that can arm the swap without anyone having said so. A caller
+ * asking "is it on" wants the state a person set and can unset -- reporting
+ * the file-backed arm here would show ON for a control that turning off does
+ * not clear.
+ *
+ * Exported so a caller can read it BY NAME. `g_gate` is file-static, so the
+ * alternative is an address that moves on every rebuild. */
+int sh_rawmap_swap_is_armed(void)
+{
+    return (InterlockedCompareExchange(&g_gate, 0, 0) != 0) ? 1 : 0;
+}
+
 int sh_rawmap_swap_set_source(const char *path)
 {
     if (path == NULL || path[0] == '\0') {

@@ -57,6 +57,12 @@ int sh_rawmap_swap_install(void *deser_fn, int deser_status_ok);
  * command (OG's snapHak_rawmaps_on); this flag-file is the TEST stand-in. */
 int sh_rawmap_swap_arm(int on);
 
+/* Read back the EXPLICIT arm state set by sh_rawmap_swap_arm: 1 armed, 0 not.
+ * Exported, so a caller resolves it by name rather than by an address that
+ * changes on every build. Does NOT report the flag-file stand-in -- see the
+ * definition for why. */
+int sh_rawmap_swap_is_armed(void);
+
 /* Set the file-backed rawmap source path (the bytes the swap delivers). For this slice a simple
  * file-backed source matches how OG sources its rawmap (%USERPROFILE%\snaphak\rawmap.json). Pass NULL
  * to reset to the default path. The real source is wired later. Returns 1 if a path is set. */
