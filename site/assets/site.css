@@ -568,6 +568,117 @@ section.deck { background: var(--deck); border-top: 1px solid var(--line-soft); 
 .community p { color: var(--muted); max-width: 44em; margin: 0 auto 14px; text-wrap: pretty; }
 .community .cta-row { justify-content: center; margin-top: 26px; }
 
+/* ---------- connect (where to find us) ----------
+
+   Each destination is drawn as a logic chip from the hero graph: an input port wired
+   into the name, an output port on the right edge where the signal leaves. The chamfered
+   outline is a two-layer clip-path — the element paints the border color, the absolutely
+   positioned ::before paints the panel fill one pixel inside it — because a plain border
+   would be sliced open by the chamfer. Accent is per-chip: cyan for the code, argent for
+   the people. */
+
+/* qualified with `section` so it outranks `section.deck`'s border and `section`'s padding */
+section.connect { padding: 72px 0 84px; border-bottom: none; }
+
+.connect-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px;
+}
+
+.link-chip {
+  --accent: var(--wire);
+  --accent-faint: var(--wire-faint);
+  --accent-soft: var(--wire-soft);
+  --accent-glow: rgba(74, 201, 240, 0.4);
+
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 12px;
+  padding: 26px 28px 24px;
+  color: var(--ink);
+  background: var(--line);
+  clip-path: polygon(18px 0, 100% 0, 100% calc(100% - 18px), calc(100% - 18px) 100%, 0 100%, 0 18px);
+  transition: transform 0.14s ease, background 0.16s ease, box-shadow 0.2s ease;
+}
+.link-chip::before {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  background: var(--panel);
+  clip-path: polygon(17px 0, 100% 0, 100% calc(100% - 17px), calc(100% - 17px) 100%, 0 100%, 0 17px);
+}
+.link-chip > * { position: relative; }
+
+.link-chip-wire {
+  --accent: var(--wire);
+  --accent-faint: var(--wire-faint);
+  --accent-soft: var(--wire-soft);
+  --accent-glow: rgba(74, 201, 240, 0.4);
+}
+.link-chip-argent {
+  --accent: var(--argent);
+  --accent-faint: var(--argent-faint);
+  --accent-soft: rgba(255, 138, 30, 0.35);
+  --accent-glow: rgba(255, 138, 30, 0.4);
+}
+
+/* port -> wire -> name, the same glyph the section headings use */
+.chip-head { display: flex; align-items: center; gap: 0; }
+.link-chip .node-port {
+  border-color: var(--accent);
+  background: var(--accent-faint);
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+.link-chip .node-wire {
+  width: 26px;
+  background: linear-gradient(90deg, var(--accent-soft), transparent);
+}
+
+.chip-title {
+  font-family: var(--display);
+  text-transform: uppercase;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+/* the output port — where the signal leaves the chip */
+.chip-out {
+  margin-left: auto;
+  width: 9px;
+  height: 9px;
+  flex: none;
+  background: var(--line);
+  transition: background 0.16s ease, box-shadow 0.2s ease;
+}
+
+.chip-desc { color: var(--muted); font-size: 15.5px; line-height: 1.6; text-wrap: pretty; }
+
+.chip-addr {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+
+.link-chip:hover {
+  color: var(--ink);
+  background: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: 0 0 30px var(--accent-faint);
+}
+.link-chip:hover .node-wire { width: 34px; }
+.link-chip:hover .chip-out {
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+.link-chip:active { transform: translateY(0); }
+
+.connect-note { margin: 26px 0 0; color: var(--muted); font-size: 15px; }
+
 /* ---------- footer ---------- */
 
 .site-footer {
@@ -1600,6 +1711,7 @@ dialog.smp-modal[open] { animation: modal-in 0.18s cubic-bezier(0.22, 1, 0.36, 1
   .hero-graph .wire-path { animation: none; stroke-dashoffset: 0; }
   .hero-graph .pulse { display: none; }
   .btn, .btn:active { transition: none; transform: none; }
+  .link-chip, .link-chip:hover, .link-chip:active { transition: none; transform: none; }
   .nav-menu, .nav-toggle-lines,
   .nav-toggle-lines::before, .nav-toggle-lines::after { transition: none; }
 }
@@ -1662,6 +1774,7 @@ dialog.smp-modal[open] { animation: modal-in 0.18s cubic-bezier(0.22, 1, 0.36, 1
   .feature-row { grid-template-columns: 1fr; gap: 22px; }
   .feature-row.flip .feature-copy { order: 0; }
   .feature-row.flip .shot { order: 0; }
+  .connect-grid { grid-template-columns: 1fr; }
   .steps { grid-template-columns: 1fr; }
   .step { margin-right: 0; margin-bottom: 30px; }
   .step:last-child { margin-bottom: 0; }
@@ -1699,6 +1812,7 @@ dialog.smp-modal[open] { animation: modal-in 0.18s cubic-bezier(0.22, 1, 0.36, 1
   .btn { width: 100%; text-align: center; }
   .cta-row { flex-direction: column; align-items: stretch; }
   section { padding: 48px 0; }
+  section.connect { padding: 48px 0 56px; }
   .gallery { grid-template-columns: 1fr; }
   .navlinks { gap: 14px; }
   .navlinks a { font-size: 13px; }
