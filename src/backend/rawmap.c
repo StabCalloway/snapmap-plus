@@ -103,6 +103,22 @@ static int flag_file_present(void)
     return (attrs != INVALID_FILE_ATTRIBUTES) && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
 }
 
+/* The arm predicate BOTH detours share: the explicit gate (sh_rawmap_swap_arm, i.e. the sh_rawmaps_on
+ * command) OR the test flag-file. `flag_armed_out` is optional and reports which arm won, for the log line.
+ *
+ * Factored because the two halves of ONE switch drifted: the LOAD swap read the gate and the SAVE shadow
+ * did not, so `sh_rawmaps_off` stopped substitutions while the shadow kept overwriting rawmap.json on every
+ * map save. The command's own help says "Enable raw map save/load" -- one switch, both directions -- and a
+ * user who turned it off could still lose a rawmap they had staged there by hand. Sharing the predicate is
+ * what stops the two sides disagreeing again. */
+static int rawmap_armed(int *flag_armed_out)
+{
+    int explicit_armed = (InterlockedCompareExchange(&g_gate, 0, 0) != 0);
+    int flag_armed     = flag_file_present();
+    if (flag_armed_out) *flag_armed_out = flag_armed;
+    return explicit_armed || flag_armed;
+}
+
 /* Read the whole source file into a fresh, NUL-terminated heap buffer (OG: malloc(size+1) + fread).
  * Returns the buffer (caller frees with HeapFree) + sets *out_len, or NULL on any failure. */
 static char *read_source_file(size_t *out_len)
@@ -146,9 +162,8 @@ static int sh_deser_detour(const char *json, void *out_map)
 
     /* armed = explicit-arm (sh_rawmap_swap_arm) OR the TEST flag-file is present. The flag-file is the
      * test harness's no-console arm trigger; the explicit gate is the production-style arm. Either arms. */
-    int explicit_armed = (InterlockedCompareExchange(&g_gate, 0, 0) != 0);
-    int flag_armed = flag_file_present();
-    if (explicit_armed || flag_armed) {
+    int flag_armed = 0;
+    if (rawmap_armed(&flag_armed)) {
         size_t len = 0;
         char *ours = read_source_file(&len);
         if (ours != NULL) {
@@ -256,11 +271,14 @@ unsigned long sh_rawmap_swap_count(void)
 /* rawmap.c -- see rawmap.h. The rawmap SAVE shadow (port of OG FUN_180023e60, the
  * INVERSE of the LOAD swap rawmap.c).
  *
- * Detours idSnapMap::SerializeToJson(idSnapMap* map, idStr* out, uint8 compact). On every save our detour
- * FIRST calls the engine ORIGINAL (via the trampoline) so the engine's own serializer fills the
+ * Detours idSnapMap::SerializeToJson(idSnapMap* map, idStr* out, uint8 compact). On an ARMED save our
+ * detour FIRST calls the engine ORIGINAL (via the trampoline) so the engine's own serializer fills the
  * out-idStr `out` -- the real save proceeds untouched -- and THEN reads out.len/out.data and mirrors those
  * bytes to %LOCALAPPDATA%\snapmap-plus\rawmap.json. The just-saved map thus becomes a reusable rawmap (the
  * inverse of the LOAD swap, which substitutes rawmap.json INTO a load). See the header for the full RE.
+ *
+ * ARMED means the same `rawmap_armed()` the LOAD swap uses -- the shadow is the save half of one switch,
+ * not an always-on mirror. The engine's own serialize is never gated; only the copy to disk is.
  *
  * Why this is safe to slot in front of the engine fn: the detour has the EXACT prototype of the target
  * (void(idSnapMap*, idStr*, uint8)), so the stolen-prologue trampoline preserves the engine's calling
@@ -357,8 +375,15 @@ static void sh_ser_detour(void *map, void *out_idstr, unsigned char compact)
 {
     if (g_ser_orig == NULL) return;   /* defensive: should never happen once installed */
 
-    /* 1) the engine's own serialize -- the real save, untouched. */
+    /* 1) the engine's own serialize -- the real save, untouched. This runs UNCONDITIONALLY and BEFORE the
+     *    gate check below: the player's save must complete identically whether the shadow is on or off. */
     g_ser_orig(map, out_idstr, compact);
+
+    /* 2) the shadow is the SAVE half of the rawmaps switch, so it obeys the same arm the LOAD swap does.
+     *    Ungated, this overwrote rawmap.json on every map save even with rawmaps off -- silently discarding
+     *    a rawmap the user had put there deliberately. Checked AFTER the real save so the gate can never
+     *    affect what the engine writes. */
+    if (!rawmap_armed(NULL)) return;
 
     if (out_idstr == NULL) return;
 

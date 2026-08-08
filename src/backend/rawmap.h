@@ -75,10 +75,15 @@ unsigned long sh_rawmap_swap_count(void);
 /* rawmap.h -- the rawmap SAVE shadow, native C
  * (port of OG's SerializeToJson detour FUN_180023e60 -- the INVERSE of the LOAD swap sh_rawmap_swap).
  *
- * This is the SAVE half of the rawmap feature: when the editor SAVES a SnapMap, the backend ALSO
- * writes the serialized map JSON to %LOCALAPPDATA%\snapmap-plus\rawmap.json (the OG wrote
+ * This is the SAVE half of the rawmap feature: when the editor SAVES a SnapMap AND rawmaps are armed,
+ * the backend ALSO writes the serialized map JSON to %LOCALAPPDATA%\snapmap-plus\rawmap.json (the OG wrote
  * %USERPROFILE%\snaphak\rawmap.json), so the just-saved map becomes a reusable rawmap (the inverse of
  * the LOAD swap, which substitutes rawmap.json INTO a map load).
+ *
+ * The arm is the SAME gate the LOAD swap reads (sh_rawmap_swap_arm / the sh_rawmaps_on command). It has to
+ * be: one command named "raw map save/load" that only governed the load half meant `sh_rawmaps_off` still
+ * let a save overwrite a rawmap the user had staged there on purpose. The engine's own serialize is never
+ * gated -- the real save always completes, identically, either way. Only the copy to disk is conditional.
  *
  * MECHANISM (DIRECT, the OG decompile of
  * FUN_180023e60, ratified 2026-06-20): OG's SAVE handler is a detour on
