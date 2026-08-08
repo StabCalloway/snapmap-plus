@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<!-- decl_scroll_probe.html -- measures the decl editor's two-layer scroll sync in real Chromium.
+
+The colored <pre> and the transparent <textarea> hold IDENTICAL text (proved by
+decl_overlay_test.js), and refreshDeclScroll() keeps them aligned with a raw
+`pre.scrollTop = ta.scrollTop`. That only works if both layers can scroll the same distance.
+
+They can't necessarily: the textarea is overflow:auto + wrap="off", so a long line gives it a
+HORIZONTAL SCROLLBAR that eats ~15px of its scrollport. The <pre> is overflow:hidden and never
+gets one. Scroll to the bottom and the pre clamps short -> the painting sits lower than the real
+text -> the caret lands on a different line than the one you clicked.
+
+This page reproduces .code-editor with the shipped CSS verbatim and prints the numbers.
+Run: msedge --headless=new --dump-dom file:///.../tests/decl_scroll_probe.html
+-->
+<html><head><meta charset="utf-8"><style>
+  html,body { margin:0; }
+  .host { position: relative; width: 420px; height: 200px; }
+  /* ---- verbatim from mockup.html .code-editor ---- */
+  .code-editor { position: relative; height: 200px; border: 1px solid #444; border-radius: 5px; background: #222; overflow: hidden; }
+  .code-editor pre, .code-editor textarea {
+    position: absolute; top: 0; right: 0; bottom: 0; left: var(--ceGutterW, 30px); margin: 0; padding: 6px 8px; border: none; border-radius: 0;
+    font-family: Consolas, "Courier New", monospace; font-size: 11.5px; line-height: 1.5;
+    white-space: pre; tab-size: 4; -moz-tab-size: 4;
+  }
+  .code-editor pre { overflow: hidden; pointer-events: none; color: #ddd; }
+  .code-editor textarea { overflow: auto; background: transparent; color: transparent; caret-color: #fff; resize: none; }
+</style></head><body>
+<div class="host"><div class="code-editor" id="codeEditor">
+  <pre aria-hidden="true"><code id="declHl"></code></pre>
+  <textarea id="declText" spellcheck="false" autocomplete="off" wrap="off"></textarea>
+</div></div>
+<pre id="out"></pre>
+<script>
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// A cage-swinger-shaped decl: tall enough to scroll, with one LONG renderModel line (the thing
+// aqua changed right before the bug appeared).
+var LONG = 'models/mapobjects/hell/hell_cage_swinger/hell_cage_swinger_variant_b_large.lwo';
+var lines = ['edit = {', '\trenderModelInfo = {', '\t\tmodel = "' + LONG + '";',
+             '\t\tscale = { x = 16; y = 128; z = 64; }', '\t}'];
+for (var i = 0; i < 25; i++) lines.push('\tfield_' + i + ' = ' + i + ';');
+lines.push('}');
+var TEXT = lines.join('\n');
+
+var ta = document.getElementById('declText'), pre = document.querySelector('#codeEditor pre');
+var out = [];
+function log(s){ out.push(s); }
+
+function measure(label, text, withTrailingNewline) {
+  ta.value = text;
+  // renderHl(): plain text + spans; the shipped version appends a trailing '\n'
+  document.getElementById('declHl').innerHTML = esc(text) + (withTrailingNewline ? '\n' : '');
+
+  var lineH = parseFloat(getComputedStyle(ta).lineHeight);
+  var maxTa  = ta.scrollHeight  - ta.clientHeight;
+  var maxPre = pre.scrollHeight - pre.clientHeight;
+
+  // what refreshDeclScroll() does, at the bottom of the file
+  ta.scrollTop = 1e6;              // scroll the textarea to its true bottom
+  pre.scrollTop = ta.scrollTop;    // <-- the shipped sync
+  var drift = ta.scrollTop - pre.scrollTop;
+
+  log('--- ' + label + ' ---');
+  log('  lineHeight            ' + lineH.toFixed(2) + 'px');
+  log('  textarea clientH/scrollH  ' + ta.clientHeight + ' / ' + ta.scrollHeight + '   maxScrollTop ' + maxTa);
+  log('  pre      clientH/scrollH  ' + pre.clientHeight + ' / ' + pre.scrollHeight + '   maxScrollTop ' + maxPre);
+  log('  h-scrollbar on textarea   ' + (ta.offsetHeight - ta.clientHeight) + 'px');
+  log('  DRIFT at bottom       ' + drift.toFixed(2) + 'px  = ' + (drift / lineH).toFixed(2) + ' lines');
+  log('');
+  return drift / lineH;
+}
+
+var a = measure('long renderModel line (h-scrollbar present), shipped trailing \\n', TEXT, true);
+var short = TEXT.replace('"' + LONG + '"', '"short.lwo"');
+var b = measure('short model line (no h-scrollbar), shipped trailing \\n', short, true);
+var c = measure('long renderModel line, WITHOUT the trailing \\n', TEXT, false);
+
+log('VERDICT (before fix): ' + (Math.abs(a) >= 0.5 ? 'DRIFT >= half a line with the long line present -- reproduces'
+                                                   : 'no meaningful drift (' + a.toFixed(2) + ' lines)'));
+log('');
+
+// ---- candidate fix: reserve the textarea's own scrollbar gutters on the <pre>, so both layers can
+// travel the identical distance on both axes. ----
+function applyFix() {
+  var hsb = ta.offsetHeight - ta.clientHeight;   // horizontal scrollbar height (0 when absent)
+  var vsb = ta.offsetWidth  - ta.clientWidth;    // vertical scrollbar width    (0 when absent)
+  pre.style.paddingBottom = (6 + hsb) + 'px';
+  pre.style.paddingRight  = (8 + vsb) + 'px';
+}
+function measureFixed(label, text) {
+  ta.value = text;
+  document.getElementById('declHl').innerHTML = esc(text) + '\n';
+  applyFix();
+  var lineH = parseFloat(getComputedStyle(ta).lineHeight);
+  ta.scrollTop = 1e6; pre.scrollTop = ta.scrollTop;
+  var dv = ta.scrollTop - pre.scrollTop;
+  ta.scrollLeft = 1e6; pre.scrollLeft = ta.scrollLeft;
+  var dh = ta.scrollLeft - pre.scrollLeft;
+  log('--- ' + label + ' ---');
+  log('  vertical   drift ' + dv.toFixed(2) + 'px = ' + (dv / lineH).toFixed(2) + ' lines');
+  log('  horizontal drift ' + dh.toFixed(2) + 'px');
+  log('');
+  return Math.max(Math.abs(dv), Math.abs(dh));
+}
+var f1 = measureFixed('WITH FIX: long renderModel line', TEXT);
+var f2 = measureFixed('WITH FIX: short model line', short);
+log('VERDICT (after fix): ' + ((f1 < 0.5 && f2 < 0.5) ? 'both axes align exactly -- FIXED'
+                                                      : 'still drifting: ' + f1 + ' / ' + f2 + 'px'));
+document.getElementById('out').textContent = out.join('\n');
+</script></body></html>

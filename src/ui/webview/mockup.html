@@ -1434,8 +1434,25 @@
     var w = Math.ceil(digits * (charW || 6.9)) + 12;   // digits + the column's 6px right pad + breathing room
     if (w !== ceGutterW) { ceGutterW = w; $('codeEditor').style.setProperty('--ceGutterW', w + 'px'); }
   }
+  // BUGFIX (measured in Chromium, tests\decl_scroll_probe.html): the two layers must be able to SCROLL the
+  // same distance, not just hold the same text. The textarea is overflow:auto + wrap="off", so a long line
+  // (a renderModel path is the usual culprit) gives it a horizontal scrollbar that eats 15px off its own
+  // scrollport; the <pre> is overflow:hidden and never grows one. That made the pre bottom out 15px before
+  // the textarea did -- 0.87 of a 17.25px line -- so near the end of a long decl the painted code sat almost
+  // exactly one line below the real text, and the caret landed on a different line than the one you clicked.
+  // Same story sideways with the vertical scrollbar. Reserving the textarea's own scrollbar gutters as extra
+  // pre padding makes both maxScrollTop/maxScrollLeft identical (probe: 0.00px drift on both axes).
+  // Cached: this runs per scroll event, and only a scrollbar appearing/disappearing can change it.
+  var preGutterH = -1, preGutterV = -1;
   function refreshDeclScroll() {
     var ta = $('declText'), pre = $('codeEditor').querySelector('pre');
+    var hsb = ta.offsetHeight - ta.clientHeight;   // horizontal scrollbar height (0 when absent; border:none)
+    var vsb = ta.offsetWidth  - ta.clientWidth;    // vertical scrollbar width    (0 when absent)
+    if (hsb !== preGutterH || vsb !== preGutterV) {
+      preGutterH = hsb; preGutterV = vsb;
+      pre.style.paddingBottom = (6 + hsb) + 'px';   // 6px/8px = the .code-editor pre/textarea base padding
+      pre.style.paddingRight  = (8 + vsb) + 'px';
+    }
     pre.scrollTop = ta.scrollTop; pre.scrollLeft = ta.scrollLeft;
     $('declGutter').style.transform = 'translateY(' + (-ta.scrollTop) + 'px)';
   }
@@ -3099,6 +3116,25 @@
   document.getElementById('declFocusBtn').addEventListener('click', function(){
     setDeclFocus(!document.getElementById('editor').classList.contains('focus-mode'));
   });
+  // BUGFIX (user-reported, "the highlight moves the data around"): a browser text control ships with
+  // native text drag-and-drop -- press on an ALREADY-selected range, move the mouse, and the browser MOVES
+  // that text to wherever the pointer is released. In a decl editor that is never what anyone wants: it
+  // silently relocates a line/value while it LOOKS like an ordinary re-highlight, which is exactly the
+  // reported "I edited this line but the one below it changed". It is worse here than in a normal browser
+  // because we live inside DOOM's window: if the game eats the mouse-up, the drag session never ends and
+  // keeps re-dropping the payload on every subsequent move (the reported "a drag motion got stuck and it's
+  // replacing the data at every move").
+  //
+  // Killing 'dragstart' does NOT touch ordinary click-drag SELECTION -- dragstart only fires when the press
+  // begins on top of an existing selection, which is precisely the destructive gesture. 'drop' goes with it
+  // so nothing (a file dragged onto the game window, text from another field) can be dumped into a decl.
+  //
+  // Capture phase + a single exception: the Prefabs tree is the ONE surface with a real, intentional
+  // HTML5 drag (move a prefab between folders -- see prefabTree's own dragstart/dragover/drop below).
+  function inPrefabTree(t) { return !!(t && t.closest && t.closest('#prefabTree')); }
+  document.addEventListener('dragstart', function(e){ if (!inPrefabTree(e.target)) e.preventDefault(); }, true);
+  document.addEventListener('drop',      function(e){ if (!inPrefabTree(e.target)) e.preventDefault(); }, true);
+
   // Ctrl/Cmd+S saves the decl, but only while focus is inside the state editor (declText/fields/desc-panel) --
   // scoped so it doesn't fight a future Ctrl+S on the Prefabs/Timelines tabs. doSave() already no-ops when
   // there's nothing dirty, same as the (then-disabled) Save button.
