@@ -24,6 +24,7 @@
 #include "smoke.h"
 #include "rawmap.h"
 #include "palette_guard.h"
+#include "../fault_shield/mapload_guards.h"   /* the two map-load / spawn game-defect guards */
 #include "strids.h"
 #include "overrides.h"
 #include "commands.h"
@@ -233,6 +234,30 @@ static DWORD WINAPI bootstrap_thread(LPVOID p)
         /* sh_palette_guard_install(g_doom_base); */
         backend_log("rendernode-guard: DISABLED (redundant since the ae_apply_one root fix; "
                     "fault-shield itself is ACTIVE)");
+
+        /* the MAP-LOAD / SPAWN GAME-DEFECT GUARDS (fault_shield/mapload_guards.c). Two crashes whose root
+         * cause is in the GAME's code, each guarded in front of the engine's own unvalidated deref:
+         *
+         *   evwire-guard (0x9C2370)  -- the event/trigger linker walks a link list's element buffer for
+         *     `num` entries having validated neither the buffer nor num-vs-capacity. A stale list faults
+         *     at 0x9C24B0 during map load (the faulting address IS the element pointer -- a dangling heap
+         *     pointer, so a NULL test would not catch it; the guard probes readability). On a bad list the
+         *     guard resets it to the engine's OWN empty-list state, so the walk is a no-op and the engine's
+         *     next append rebuilds it. Some event wiring is lost on a corrupt load; nothing is freed.
+         *
+         *   interactable-guard (0x1232830) -- idInteractable::Spawn dereferences its subsystem pointer
+         *     *(this+0x3DB0) twice with no null check, faulting at 0x123293F (address 0xE90) when an
+         *     interactable spawns before that subsystem is up. The guard zeroes the tag count so the engine
+         *     takes its own already-exercised "nothing to bind" path; the rest of Spawn still runs. NOTE:
+         *     the result-null-check right after the faulting load is NOT a usable absent-chain path -- it
+         *     leads to a second access violation in the callee. See mapload_guards.c for that disassembly.
+         *
+         * Both are no-ops on a healthy path (one SEH-guarded header read; a readability probe only when
+         * there is something to vet) and neither adds per-frame work. No editor/sig dependency
+         * (recipe-tagged RVAs off the module base, declared in fault_shield/engine_layout.h). To DISABLE
+         * one guard, comment out its line alone -- same convention as the render-node guard above. */
+        sh_evwire_guard_install(g_doom_base);
+        sh_interactable_guard_install(g_doom_base);
 
         void *get_decls = (void *)sig_addr_by_name(results, db, "GetDeclsOfType");
         /* GetDeclsOfType is resolved here and handed to the command layer below (sh_commands_install),

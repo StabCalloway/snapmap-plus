@@ -229,4 +229,71 @@
 #define RVA_THROWINFO_RECOVERABLE 0x2ded690u  /* idException ThrowInfo (the survivable throw) */
 #define RVA_THROWINFO_FATAL       0x2ded990u  /* idFatalException ThrowInfo (terminal -> record NOW) */
 
+/* ==== TARGETED GAME-DEFECT GUARDS (mapload_guards.c) ================================================
+ * Two detours that sit IN FRONT of engine functions that dereference a pointer they never validate, so
+ * the engine never reaches the faulting read. Neither alters a healthy path. Each is armed by its own
+ * install call in the backend bootstrap and so is individually removable there.
+ *
+ * ---- (1) THE EVENT/TRIGGER LINKER 0x9C2370 -- an unvalidated list walk (use-after-free on map load) --
+ * DIRECT (Ghidra decompile + disasm of FUN_1409c2370, 401 bytes, pinned build). The function is a
+ * bidirectional AddUnique: it appends param_2 to the list held at *(param_1+0x20) and param_1 to the
+ * list held at *(param_2+0x28). Each half is, verbatim in shape:
+ *     list = *(owner + slot);
+ *     if (list == 0) { list = new(0x18); list->data = 0; list->num = 0; list->cap = 0;
+ *                      list->gran = 0x50000; }                       <-- the engine's OWN empty state
+ *     for (i = 0; i <= list->num - 1; i++) if (list->data[i] == other) return;   <-- the faulting walk
+ *     if ((num != cap || Grow(list)) && num < cap) { list->data[num] = other; num++; }
+ * It null-checks the LIST and bounds the loop by num, but NEVER validates list->data and never checks
+ * num against cap. A stale list whose data buffer has been freed faults at `CMP qword ptr [RAX],RSI`
+ * (RVA 0x9C24B0, RAX = data advanced by 8 per iteration -- so the faulting address IS RAX, large and
+ * different every occurrence). Reached from idGameLocal::LoadMap 0x323680 via the event wiring layer.
+ * RE-DERIVE per build: find the ~400-byte function whose two halves each load a list handle from a fixed
+ * owner offset, walk it with `CMP qword ptr [RAX],RSI / ADD RAX,0x8`, and fall through to an append
+ * gated on `CMP <num>,[list+0xc]`. Its entry is RVA_EVLINK; the two owner offsets and the {data,num,cap}
+ * triple read straight off that disasm. STOLEN = the first whole-instruction boundary at or past 14
+ * bytes from the entry -- pinned build: PUSH RDI[2] + SUB RSP,0x30[4] + MOV [RSP+0x20],-2[9] = 15, all
+ * position-independent (no RIP-relative operand, no relative jmp/call). */
+#define RVA_EVLINK          0x9C2370u  /* FUN_1409c2370(a, b): the bidirectional event/trigger AddUnique */
+#define EVLINK_STOLEN       15u        /* clean prologue boundary >= 14 (see recipe above) */
+#define EVLINK_SLOT_A       0x20u      /* *(param_1 + this) = the list that receives param_2 */
+#define EVLINK_SLOT_B       0x28u      /* *(param_2 + this) = the list that receives param_1 (crash site) */
+#define EVLIST_DATA_OFF     0x00u      /* list: element buffer (the pointer the engine never validates) */
+#define EVLIST_NUM_OFF      0x08u      /* list: element count (int); bounds the walk */
+#define EVLIST_CAP_OFF      0x0Cu      /* list: allocated capacity (int); bounds the append */
+#define EVLIST_HDR_SIZE     0x10u      /* the {data,num,cap} header the guard reads/repairs (stops before gran) */
+#define EVLIST_COUNT_MAX    0x100000   /* sanity ceiling. The editor entity cap is ~0x3FFE (see RN_COUNT_MAX
+                                        * in the render-node guard); no single entity's link list can
+                                        * plausibly exceed every entity by 256x, so a larger count is
+                                        * corrupt on its face and also keeps num*8 far from overflow. */
+
+/* ---- (2) idInteractable::Spawn 0x1232830 -- an unchecked subsystem pointer on the spawn path ---------
+ * DIRECT (Ghidra decompile + disasm of FUN_141232830, 3032 bytes). The function names ITSELF in its own
+ * log literal: FUN_141a08a40("[%s] Unable to find Tag Name %s ", "idInteractable::Spawn", ...). Reached
+ * from idGameLocal::SpawnEntitiesForLayers 0x343A60; it has zero static callers (virtual, vtable slot at
+ * data 0x137EC72C), so the entry detour is the only way in front of it.
+ *   The tag-binding loop is entered ONLY when the tag count *(this+0x4C98) is > 0:
+ *     0x12328F1  CMP dword ptr [R14+0x4c98],EDX
+ *     0x12328F8  JLE <past the whole loop>              <-- the engine's own "nothing to bind" gate
+ *   Inside the loop the subsystem pointer *(this+0x3DB0) is dereferenced twice with NO null check:
+ *     0x1232938  MOV RAX,[R14+0x3db0]
+ *     0x123293F  MOV RCX,[RAX+0xe90]     <-- AV when the subsystem is not up (RAX = 0 -> address 0xE90)
+ *   and again via FUN_1414BCEA0(*(this+0x3db0), ...), whose first act is the identical unchecked base
+ *   deref `0x14BCEAF MOV RAX,[RCX+0xe90]`. Both sites null-check the RESULT of the +0xE90 load, never
+ *   the base -- and that result-check is NOT a survivable "chain absent" path (see mapload_guards.c for
+ *   the disassembly proving the JZ arm faults in its callee). The engine's only real, exercised
+ *   behaviour for "this interactable has nothing to bind" is the tag-count gate above, and that path
+ *   never touches +0x3DB0.
+ * RE-DERIVE per build: find the function referencing the string "idInteractable::Spawn"; its tag loop is
+ * the one bounded by a dword at a fixed `this` offset (TAGCOUNT) whose body loads a pointer from another
+ * fixed `this` offset (SUBSYS) and immediately reads [that + 0xE90]. All three numbers read off that
+ * disasm. STOLEN = the first whole-instruction boundary at or past 14 bytes from the entry -- pinned
+ * build: MOV RAX,RSP[3] + PUSH RBP[1] + PUSH R12/R13/R14/R15[2 each] + LEA RBP,[RAX-0x168][7] = 19, all
+ * position-independent. */
+#define RVA_INTERACTABLE_SPAWN 0x1232830u /* idInteractable::Spawn(this) -- self-identifying log literal */
+#define INTERACTABLE_STOLEN    19u        /* clean prologue boundary >= 14 (see recipe above) */
+#define IA_SUBSYS_OFF          0x3DB0u    /* this + this = the subsystem pointer the loop derefs unchecked */
+#define IA_TAGCOUNT_OFF        0x4C98u    /* this + this = tag count (int); >0 is what enters the loop */
+#define IA_SUBSYS_PROBE        0xE98u     /* bytes of the subsystem the engine must be able to read:
+                                           * both derefs are [base+0xE90] (8 bytes) -> 0xE90 + 8 */
+
 #endif /* SHIELD_ENGINE_LAYOUT_H */

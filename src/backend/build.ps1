@@ -68,6 +68,9 @@ param(
                            # crash-record capture (the crash-report dialog's evidence trail): the pure
                            # record formatter + the fatal-path handlers/record writer.
                            "../fault_shield/crash_record_format.c", "../fault_shield/crash_report.c",
+                           # targeted guards for game-side defects on the map-load / spawn path (the
+                           # event-link list walk + idInteractable::Spawn's subsystem pointer).
+                           "../fault_shield/mapload_guards.c",
                            "../fault_shield/fault_shield.c"),
     [string]$Out = "XINPUT1_3.dll",
     # -Diag: build the DIAGNOSTIC variant -- adds the catch-all crash + environment logger (shield_diag.c)
