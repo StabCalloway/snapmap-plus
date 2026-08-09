@@ -17,7 +17,12 @@
 # Needs: Build Tools for Visual Studio 2022 (C++ workload). Uses the system-installed WebView2 runtime
 # at RUN time (preinstalled on Windows 11; evergreen runtime on most Windows 10).
 param(
-    [string]$Out = "snapmap-plus-ui.dll"
+    [string]$Out = "snapmap-plus-ui.dll",
+    # -VcVarsVer: PIN the MSVC toolset (e.g. "14.44.35207") instead of the VS install default, so a
+    # shipped DLL can be rebuilt byte-for-byte. Defaults from SNAPMAPPLUS_VCVARS_VER -- the repo-root
+    # build.ps1 forwards no arguments here, so the env var is what keeps this half of the lockstep
+    # build on the same compiler as the backend half. See src\backend\build.ps1 for the full note.
+    [string]$VcVarsVer = $env:SNAPMAPPLUS_VCVARS_VER
 )
 $ErrorActionPreference = "Stop"
 $here   = Split-Path -Parent $MyInvocation.MyCommand.Path            # src\ui
@@ -35,6 +40,27 @@ $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.
 if (-not $vs) { throw "VC Tools (x86/x64) not found in any VS install." }
 $vcvars = "$vs\VC\Auxiliary\Build\vcvars64.bat"
 if (-not (Test-Path $vcvars)) { throw "vcvars64.bat not found at $vcvars" }
+
+# Resolve (and, when pinned, VERIFY) the MSVC toolset up front -- same check the backend build does, so
+# a missing pin fails by name here too rather than as a bare non-zero exit out of vcvars64.bat.
+$vcvarsArgs = ""
+$toolsetDir = Join-Path $vs "VC\Tools\MSVC"
+if ($VcVarsVer) {
+    if (-not (Test-Path (Join-Path $toolsetDir $VcVarsVer))) {
+        $have = (Get-ChildItem $toolsetDir -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) -join ", "
+        throw ("pinned MSVC toolset $VcVarsVer is not installed (have: $have). Install it via the VS " +
+               "Installer, or update the pin in .github/workflows/release.yml (SNAPMAPPLUS_VCVARS_VER).")
+    }
+    $vcvarsArgs = " -vcvars_ver=$VcVarsVer"
+    $toolset = $VcVarsVer + " (pinned)"
+} else {
+    # Not pinned: report the newest toolset present (same rationale as the backend build).
+    $newest = Get-ChildItem $toolsetDir -Directory -ErrorAction SilentlyContinue |
+              Sort-Object Name -Descending | Select-Object -First 1
+    if ($newest) { $toolset = $newest.Name + " (newest installed, NOT pinned)" }
+    else { $toolset = "unknown (NOT pinned)" }
+}
+Write-Host "[build] MSVC toolset $toolset"
 
 # --- 2. WebView2 SDK (NuGet) --------------------------------------------------------------------------
 # Pinned (not "latest") -- api.nuget.org's index.json lists prerelease builds interleaved with stable
@@ -149,10 +175,16 @@ $implib = $Out -replace '\.dll$', '.lib'
 # Output -> build\webview\ (the frontend's own subfolder; the backend, XINPUT1_3.dll, stays
 # directly in build\.)
 New-Item -ItemType Directory -Force (Join-Path $build "webview") | Out-Null
-$cl  = "cl /nologo /LD /O2 /W3 /EHsc /std:c++17 /MD /DWIN32 /D_WINDOWS /Fo..\..\build\obj\uiwv\ " +
+# SYMBOLS (build\webview\snapmap-plus-ui.pdb + .map) -- same flag set, and the same reasoning, as the
+# backend build (see the long note in src\backend\build.ps1): /Z7 + /DEBUG:FULL emit the symbols a crash
+# offset needs to become a function name, while /INCREMENTAL:NO /OPT:REF /OPT:ICF put back the release
+# layout that /DEBUG:FULL would otherwise change, and /Brepro makes the output deterministic. Maintainer
+# artifacts only: package.ps1 copies just the DLL, so the shipped overlay is unchanged.
+$cl  = "cl /nologo /LD /O2 /W3 /EHsc /std:c++17 /MD /Z7 /Brepro /DWIN32 /D_WINDOWS /Fo..\..\build\obj\uiwv\ " +
        "$incArgs $srcArgs /Fe:..\..\build\webview\$Out " +
-       "/link /DEF:snapmap-plus-ui.def /IMPLIB:..\..\build\obj\uiwv\$implib $libArgs"
-$cmd = "cd /d `"$here`" && `"$vcvars`" && $cl"
+       "/link /DEF:snapmap-plus-ui.def /IMPLIB:..\..\build\obj\uiwv\$implib $libArgs " +
+       "/DEBUG:FULL /INCREMENTAL:NO /OPT:REF /OPT:ICF /Brepro /PDBALTPATH:%_PDB% /MAP"
+$cmd = "cd /d `"$here`" && `"$vcvars`"$vcvarsArgs && $cl"
 
 $buildLog = Join-Path $build "build-ui.log"
 cmd /c "$cmd > `"$buildLog`" 2>&1"
@@ -160,3 +192,9 @@ $clExit = $LASTEXITCODE
 Get-Content $buildLog | Write-Host
 if ($clExit -ne 0) { throw "cl failed (exit $clExit) -- see $buildLog" }
 Write-Host "built $(Join-Path $build "webview\$Out") (WebView2)"
+# Assert the symbols landed -- a silent miss would only surface the next time a crash stack needed them.
+foreach ($sym in @(($Out -replace '\.dll$', '.pdb'), ($Out -replace '\.dll$', '.map'))) {
+    $symPath = Join-Path $build "webview\$sym"
+    if (-not (Test-Path $symPath)) { throw "expected symbol artifact missing: $symPath" }
+    Write-Host ("  symbols: {0,-26} {1,10} bytes" -f $sym, (Get-Item $symPath).Length)
+}

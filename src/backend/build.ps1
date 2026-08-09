@@ -73,7 +73,13 @@ param(
     # -Diag: build the DIAGNOSTIC variant -- adds the catch-all crash + environment logger (shield_diag.c)
     # under /DSH_DIAG. Same output name (XINPUT1_3.dll) so an end-user just swaps it in, reproduces the
     # crash, and sends sh_diag.log. A TROUBLESHOOTING build only -- not for distribution.
-    [switch]$Diag
+    [switch]$Diag,
+    # -VcVarsVer: PIN the MSVC toolset (e.g. "14.44.35207") instead of taking whatever the VS install
+    # happens to default to. A shipped DLL can only be rebuilt byte-for-byte with the compiler that made
+    # it, so the release workflow pins this; empty (the local-dev default) means "use the install
+    # default". Defaults from SNAPMAPPLUS_VCVARS_VER so ONE env var pins both halves of the lockstep
+    # build (the repo-root build.ps1 forwards no arguments to the frontend script).
+    [string]$VcVarsVer = $env:SNAPMAPPLUS_VCVARS_VER
 )
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -86,6 +92,31 @@ $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.
 if (-not $vs) { throw "VC Tools (x86/x64) not found in any VS install." }
 $vcvars = "$vs\VC\Auxiliary\Build\vcvars64.bat"
 if (-not (Test-Path $vcvars)) { throw "vcvars64.bat not found at $vcvars" }
+
+# --- toolset pin -------------------------------------------------------------------------------------
+# Resolve (and, when pinned, VERIFY) the MSVC toolset before compiling. Checking here turns "the pinned
+# toolset is not on this machine" into a named error listing what IS installed, instead of a bare
+# non-zero exit from vcvars64.bat several layers down.
+$vcvarsArgs = ""
+$toolsetDir = Join-Path $vs "VC\Tools\MSVC"
+if ($VcVarsVer) {
+    if (-not (Test-Path (Join-Path $toolsetDir $VcVarsVer))) {
+        $have = (Get-ChildItem $toolsetDir -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) -join ", "
+        throw ("pinned MSVC toolset $VcVarsVer is not installed (have: $have). Install it via the VS " +
+               "Installer, or update the pin in .github/workflows/release.yml (SNAPMAPPLUS_VCVARS_VER).")
+    }
+    $vcvarsArgs = " -vcvars_ver=$VcVarsVer"
+    $toolset = $VcVarsVer + " (pinned)"
+} else {
+    # Not pinned: report the newest toolset present, so the log still records what compiled these bytes
+    # (and shows the maintainer the value to pin). Enumerating the toolset dir keeps this independent of
+    # any VS version-marker file.
+    $newest = Get-ChildItem $toolsetDir -Directory -ErrorAction SilentlyContinue |
+              Sort-Object Name -Descending | Select-Object -First 1
+    if ($newest) { $toolset = $newest.Name + " (newest installed, NOT pinned)" }
+    else { $toolset = "unknown (NOT pinned)" }
+}
+Write-Host "[build] MSVC toolset $toolset"
 
 # Allow comma-separated -Sources (handy from the shell): "a.c,b.c" -> @("a.c","b.c").
 if ($Sources.Count -eq 1 -and $Sources[0] -match ",") { $Sources = $Sources[0].Split(",") }
@@ -115,9 +146,30 @@ $implib  = $Out -replace '\.dll$', '.lib'   # import lib + .exp -> build\obj\bac
 # Output goes to the TOP-LEVEL repo build\ (out of src\), via paths RELATIVE to cwd=$here so the
 # quoted-trailing-backslash cmd footgun (see above) is avoided: ..\..\ from src\backend\ is the repo root.
 # /DEF:xinput1_3.def + /I..\common stay cwd-relative (load-bearing -- the .def pins the XInput ordinals).
-$cl = "cl /nologo /LD /O2 /W3 /MT $defs /Fo..\..\build\obj\backend\ /I..\common $srcArgs /Fe:..\..\build\$Out /link /DEF:xinput1_3.def /IMPLIB:..\..\build\obj\backend\$implib shell32.lib ole32.lib"
+# SYMBOLS (build\XINPUT1_3.pdb + .map). A crash stack is a list of module offsets; without symbols a
+# reported "XINPUT1_3.dll+0x1234" cannot be turned back into a function, which is most of the value of
+# the crash-report dialog. These are MAINTAINER artifacts -- the release workflow publishes them as a
+# separate asset; package.ps1 never copies them into dist\, so the shipped overlay stays two DLLs.
+#
+# The flag set is chosen to be LAYOUT-NEUTRAL -- the shipped code must not change just because we now
+# emit symbols for it:
+#   /Z7        debug info inside each .obj (no separate compiler PDB, so nothing races over one shared
+#              vc*.pdb in the common /Fo dir); the linker collects it into one PDB.
+#   /DEBUG:FULL is what generates that PDB -- but it also flips two linker DEFAULTS that WOULD move code:
+#              it implies /INCREMENTAL (thunks + padding) and turns OFF /OPT:REF and /OPT:ICF. The three
+#              explicit flags below put the release layout back; they are not optional extras.
+#   /Brepro    deterministic output (hash instead of a build timestamp) on BOTH the compile and the link,
+#              so the same source + same toolset gives the same bytes. It requires non-incremental
+#              linking, which /INCREMENTAL:NO already guarantees; nothing else set here reads the PE
+#              timestamp (package.ps1 hashes contents, the installer verifies those hashes).
+#   /PDBALTPATH:%_PDB% records the PDB as a bare filename instead of this machine's absolute build path,
+#              which would otherwise be embedded in every shipped DLL. Symbol lookup is by GUID+age, so
+#              nothing is lost.
+$cl = "cl /nologo /LD /O2 /W3 /MT /Z7 /Brepro $defs /Fo..\..\build\obj\backend\ /I..\common $srcArgs /Fe:..\..\build\$Out " +
+      "/link /DEF:xinput1_3.def /IMPLIB:..\..\build\obj\backend\$implib shell32.lib ole32.lib " +
+      "/DEBUG:FULL /INCREMENTAL:NO /OPT:REF /OPT:ICF /Brepro /PDBALTPATH:%_PDB% /MAP"
 
-$cmd = "cd /d `"$here`" && `"$vcvars`" && $cl"
+$cmd = "cd /d `"$here`" && `"$vcvars`"$vcvarsArgs && $cl"
 # vcvars64.bat emits a spurious "'vswhere.exe' is not recognized" line on stderr (it probes a bare-PATH
 # vswhere before falling back); under $ErrorActionPreference='Stop' that native-command stderr line trips
 # PS 5.1 as a terminating error even though cl succeeds. Route the whole cmd's stdout+stderr to a log and
@@ -130,6 +182,13 @@ $clExit = $LASTEXITCODE
 Get-Content $buildLog | Write-Host
 if ($clExit -ne 0) { throw "cl failed (exit $clExit) -- see $buildLog" }
 Write-Host "built $(Join-Path $outDir $Out)"
+# The symbols are what make a reported crash offset resolvable; a silent miss would only be discovered
+# the next time someone tried to read a stack, so assert they were actually produced.
+foreach ($sym in @(($Out -replace '\.dll$', '.pdb'), ($Out -replace '\.dll$', '.map'))) {
+    $symPath = Join-Path $outDir $sym
+    if (-not (Test-Path $symPath)) { throw "expected symbol artifact missing: $symPath" }
+    Write-Host ("  symbols: {0,-22} {1,10} bytes" -f $sym, (Get-Item $symPath).Length)
+}
 if ($Diag) {
     Write-Host "[build] *** DIAGNOSTIC build -- DO NOT DISTRIBUTE (troubleshooting only; writes sh_diag.log + sh_crash.dmp) ***"
 } else {

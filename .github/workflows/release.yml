@@ -21,7 +21,20 @@ permissions:
 
 jobs:
   release:
-    runs-on: windows-latest
+    # PINNED, not windows-latest. A shipped DLL is only reproducible if it can be rebuilt with the same
+    # compiler, and "latest" is a moving alias -- when it rolls to a new image the Visual Studio version
+    # (and with it the MSVC toolset) changes underneath the release with no commit to show for it. The
+    # image pin fixes the VS major version; SNAPMAPPLUS_VCVARS_VER below fixes the exact toolset inside
+    # it; /Brepro in the build scripts removes the build timestamp. Together those make a release
+    # rebuildable byte-for-byte, which is what lets a maintainer confirm a shipped binary matches source.
+    runs-on: windows-2022
+    env:
+      # The MSVC toolset every shipped binary is built with. Both build.ps1 scripts read this (the
+      # repo-root build.ps1 forwards no arguments, so an env var is what reaches both halves) and pass it
+      # to vcvars64.bat as -vcvars_ver, after checking it is installed.
+      # TO BUMP: if a runner image stops shipping this toolset the build fails with a named error listing
+      # the toolsets that ARE installed -- copy the wanted one from that error into the line below.
+      SNAPMAPPLUS_VCVARS_VER: '14.44.35207'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -62,6 +75,20 @@ jobs:
           # target). snapmap-plus.exe is published as a SEPARATE asset, not bundled into the overlay zip.
           Compress-Archive -Force -DestinationPath snapmap-plus-bundle.zip `
             -Path dist\XINPUT1_3.dll, dist\snapmap-plus, dist\MANIFEST.sha256
+      - name: Zip the debug symbols (maintainer artifact)
+        shell: pwsh
+        run: |
+          # The PDB + MAP for both DLLs -- what turns a "XINPUT1_3.dll+0x1234" in a filed crash report back
+          # into a function name. Published as a SEPARATE asset because these are for maintainers, not part
+          # of what gets installed: they are deliberately NOT copied into dist\, NOT listed in
+          # MANIFEST.sha256, and NOT inside snapmap-plus-bundle.zip. That separation is load-bearing --
+          # the installer installs exactly the files the manifest lists, so anything added there would land
+          # in every user's DOOM folder. They come straight from build\, which package.ps1 never reads.
+          $ErrorActionPreference = 'Stop'
+          $syms = @("build\XINPUT1_3.pdb", "build\XINPUT1_3.map",
+                    "build\webview\snapmap-plus-ui.pdb", "build\webview\snapmap-plus-ui.map")
+          foreach ($s in $syms) { if (-not (Test-Path $s)) { throw "missing symbol artifact: $s" } }
+          Compress-Archive -Force -DestinationPath snapmap-plus-symbols.zip -Path $syms
       - name: Build the changelog from the commit log
         shell: bash
         run: |
@@ -109,6 +136,7 @@ jobs:
             snapmap-plus-bundle.zip
             dist/snapmap-plus.exe
             installer/install.ps1
+            snapmap-plus-symbols.zip
           body_path: notes.md
 
 # --- Auto-re-patcher (PLANNED, not built -- the portability endgame) ---
