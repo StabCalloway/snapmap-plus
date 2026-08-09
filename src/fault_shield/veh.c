@@ -389,6 +389,31 @@ static void force_recovery_gate(void)
     } __except (EXCEPTION_EXECUTE_HANDLER) { }
 }
 
+/* ---- Is the faulting thread DOOM's MAIN thread? -----------------------------------------------------
+ * Reads the engine's OWN main-thread id (RVA_MAIN_THREAD_ID) -- see engine_layout.h for why the shield
+ * must not sample a thread of its own instead (shield_install runs on the backend bootstrap thread).
+ *   1  = the main thread
+ *   0  = NOT the main thread (the frontend UI thread, a worker, ...)
+ *  -1  = UNKNOWN (unreadable, or the engine has not recorded it yet -- the word is 0 until engine init).
+ * SEH-guarded: a shifted/unmapped RVA on some other build must degrade to UNKNOWN, never fault inside the
+ * VEH. UNKNOWN is deliberately NOT treated as off-main by the caller: an unproven answer must leave the
+ * existing behaviour exactly as it was. */
+static int shield_on_main_thread(void)
+{
+    uint32_t mt = 0;
+    if (g_doom_base == NULL) return -1;
+    __try {
+        mt = *(volatile uint32_t *)(g_doom_base + RVA_MAIN_THREAD_ID);
+    } __except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+    if (mt == 0) return -1;
+    return (mt == GetCurrentThreadId()) ? 1 : 0;
+}
+
+/* Count of off-main-thread faults the shield has declined to force through Error(6) (log rate-limit). */
+#define SHIELD_MAX_OFFTHREAD 8
+static volatile LONG g_offthread_seen = 0;
+static char g_offthread[320];
+
 static LONG CALLBACK shield_veh(PEXCEPTION_POINTERS ep)
 {
     EXCEPTION_RECORD *er = ep->ExceptionRecord;
@@ -611,6 +636,59 @@ static LONG CALLBACK shield_veh(PEXCEPTION_POINTERS ep)
         }
     }
     }   /* end if (is_av) -- a wild AV the editor-unwind didn't claim falls through to Class-B */
+
+    /* ==== OFF-MAIN-THREAD GATE (defense in depth; PURE ADDITION -- the main-thread path below is
+     * byte-for-byte unchanged) ==========================================================================
+     * Class B works by RESUMING INTO idCommon::Error(6), which raises a C++ idException and relies on
+     * idCommonLocal::Frame's catch to receive it. That catch only exists on DOOM's MAIN thread -- Frame IS
+     * the main thread's frame body. On any OTHER thread (notably the frontend's UI thread, which the
+     * backend spins in ui_bridge.c and which calls straight into engine code) there is NO idException
+     * handler anywhere on the stack, so the synthesized throw unwinds off the top of the thread UNHANDLED
+     * and the process dies with 0xE06D7363 -- turning a fault the OS would merely have reported into a
+     * guaranteed process kill. That is strictly worse than doing nothing, and it is the reported crash
+     * signature.
+     *
+     * The existing classifier never noticed, because its only reach test is rip_in_doom() -- which is TRUE
+     * for a UI-thread fault inside engine code -- and Class A's unwind_to_rva_range() searches for the
+     * editor Think frame, which is never on the UI thread's stack, so every off-main fault fell straight
+     * through to here.
+     *
+     * So: off the main thread, DECLINE. Record the fault with the same full diagnostics + crash record the
+     * Class-B path would have written (this must not become a silent swallow -- the crash-report dialog and
+     * shield_faults.log are how these get triaged), then EXCEPTION_CONTINUE_SEARCH so normal Windows
+     * handling applies. That leaves the fault contained rather than converted, and deliberately introduces
+     * NO new recovery mechanism -- unwinding or resuming an arbitrary worker thread is not something the
+     * shield has any evidence it can do safely.
+     *
+     * UNKNOWN (-1) falls through to the unchanged behaviour on purpose: before the engine records its main
+     * thread id, and on any build where the RVA does not read, we must not start declining faults we have
+     * always handled. Only a POSITIVE "this is not the main thread" changes anything. */
+    if (shield_on_main_thread() == 0) {
+        if (InterlockedIncrement(&g_offthread_seen) <= SHIELD_MAX_OFFTHREAD) {
+            __try {
+                char mod[80]; uintptr_t moff = 0;
+                module_at(rip, mod, sizeof mod, &moff);
+                _snprintf_s(g_offthread, sizeof g_offthread, _TRUNCATE,
+                    "OFF-MAIN fault code=0x%08lx (%s) tid=%lu rip=%p rip_rva=0x%llx mod=%s+0x%llx fault=%p "
+                    "-> NOT redirected to Error(6) (no idCommonLocal::Frame catch on this thread; forcing "
+                    "the throw here would unwind off the thread unhandled) -> CONTINUE_SEARCH",
+                    (unsigned long)code, exc_name(code), GetCurrentThreadId(), rip,
+                    (unsigned long long)rva, mod, (unsigned long long)moff, fault_addr);
+                shield_fault of = { "offthread", (int)code, g_offthread, rva, (uintptr_t)fault_addr };
+                shield_emit(&of);
+                /* the faulting call stack + a crash record, so an off-main death is fully triageable --
+                 * the same evidence the Class-B path produces, minus the redirect. */
+                capture_fault_stack(ep->ContextRecord, g_crashstk, sizeof g_crashstk, 14);
+                if (g_crashstk[0]) {
+                    shield_fault sk = { "stack", (int)code, g_crashstk, rva, (uintptr_t)fault_addr };
+                    shield_emit(&sk);
+                }
+                crash_report_file("offthread", code, rva, (uintptr_t)fault_addr, DOOM_MODULE_NAME,
+                                  g_crashstk, "", "");
+            } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        }
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
 
     /* ---- Class B (Layer 1): a wild AV the editor-unwind did NOT claim, OR a non-AV hardware fault in DOOM
      * (illegal/priv instruction, int/float divide, in-page, ...). Redirect into the engine's own recoverable

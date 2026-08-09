@@ -449,6 +449,12 @@ static enter_prefab_grab_fn g_enter_prefab_grab = NULL;
  * an in-editor in-place load never writes it -- so leaving 3 is specifically "we are going to Play". */
 #define LOAD_STATE_RVA        0x6dde198u
 #define LOAD_STATE_RUNNING    3
+/* The engine's own record of WHICH THREAD is its main thread, 8 bytes below the load-state word. This is
+ * the same DWORD the allocator's scope gate at 0x19FC900 compares GetCurrentThreadId() against -- see the
+ * MEMLOCAL_* block above and the MemLocalPushHeap entry in signatures.c, both DIRECT. It is the only
+ * correct source for "am I on the DOOM main thread": every thread THIS DLL could sample for itself is one
+ * of ours (the backend bootstrap thread, the frontend's UI thread), never DOOM's. */
+#define MAIN_THREAD_ID_RVA    0x6dde190u
 static volatile LONG        g_last_load_state = -1;
 /* "WE were the last thing to stage the prefab slot, and this is the entity count we left in it."
  * Set by ae_mkcmd_one. Used to tell OUR staged prefab apart from an engine-made Ctrl+C clipboard, which
@@ -503,6 +509,22 @@ static int ae_read_u32_safe(const void *src, int *out)
 {
     __try { *out = *(const int *)src; return 1; }
     __except (EXCEPTION_EXECUTE_HANDLER) { *out = 0; return 0; }
+}
+
+/* ---- "are we on the DOOM main thread?" -------------------------------------------------------------
+ * Reads the engine's OWN main-thread id (MAIN_THREAD_ID_RVA) rather than sampling a thread of ours.
+ *   1  = we are the engine main thread
+ *   0  = we are NOT (the frontend UI thread, the backend bootstrap thread, ...)
+ *  -1  = UNKNOWN: unreadable, or the engine has not recorded it yet (the word is 0 before engine init).
+ * Callers must treat -1 as "cannot prove", never as "off-main" -- an unknown answer must not silently
+ * re-route work. */
+static int ae_on_main_thread(void)
+{
+    uint32_t mt = 0;
+    if (!g_doom_base) return -1;
+    if (!ae_read_u32(g_doom_base + MAIN_THREAD_ID_RVA, &mt)) return -1;
+    if (mt == 0) return -1;
+    return (mt == GetCurrentThreadId()) ? 1 : 0;
 }
 
 /* ---- idMemLocal heap scope: push the process heap around an allocation that must outlive the map ----
@@ -727,6 +749,31 @@ static int ae_block_survives_map(const void *p)
     if (flags & 3) return 0;                    /* not a heap block at all */
     if (flags & 4) return 0;                    /* MAP heap -> dies at map teardown */
     return 1;                                   /* persist (bit3) or process heap -> survives */
+}
+
+/* ---- WHICH heap owns this block? (names it, instead of the survives/doesn't verdict above) -----------
+ * Same allocator-header read as ae_block_survives_map -- see that function and the ae_log_alloc_heap
+ * comment for the 16-byte layout and the cookie derivation. Returns a static string; "?" whenever the
+ * header is unreadable or the guard cookie does not validate, because in that case the tag/flags bytes are
+ * unrelated memory and naming a heap from them would be a fabrication. */
+static const char *ae_block_heap_name(const void *p)
+{
+    if (!p) return "?(null)";
+    const unsigned char *b = (const unsigned char *)p;
+    unsigned tag = 0, flags = 0, lo = 0, hi = 0; int cookie = 0; void *sizeRaw = NULL;
+    if (!ae_read_u8_safe(b - 0x10, &tag) || !ae_read_u8_safe(b - 0x0f, &flags) ||
+        !ae_read_u8_safe(b - 0x0e, &lo)  || !ae_read_u8_safe(b - 0x0d, &hi) ||
+        !ae_read_u32_safe(b - 0x0c, &cookie) || !ae_read_ptr(b - 0x08, &sizeRaw))
+        return "?(header unreadable)";
+    unsigned long long size = (unsigned long long)sizeRaw;
+    unsigned long long x = size ^ (unsigned long long)(b - 0x10);
+    unsigned expect = ((((unsigned)((lo | (hi << 8)) & 0xffff) << 8) | (tag & 0xff)) << 8) | (flags & 0xff);
+    expect ^= (unsigned)(x >> 32) ^ (unsigned)x;
+    if ((unsigned)cookie != expect) return "?(not an allocator block start)";
+    if (flags & 3) return "not-a-heap-block";
+    if (flags & 4) return "MAP (dies at map teardown)";
+    if (flags & 8) return "PERSIST (survives)";
+    return "PROCESS (survives)";
 }
 
 /* "editor up" guard, matching the reference implementation editorSession: the loaded-map ptr (+0x204c8) is non-null in-editor. */
@@ -1209,6 +1256,58 @@ static int ae_apply_one(int id, const char *patched_text)
         applied = 0;
     }
     if (def_ctored) { __try { g_def_dtor(tmpDef); } __except (EXCEPTION_EXECUTE_HANDLER) {} }
+
+    /* ---- ONE-SHOT COMMIT PROVENANCE PROBE (crash-triage instrument, 2026-08) ----------------------
+     * WHY THIS EXISTS. The 2026-07-12 writeup (docs/backend-changes.md) attributes the acctargets/bss
+     * "Memory corruption before block!" at map teardown to the deferred commit having left the decl-source
+     * block "double-owned" across two threads, and fixes it by committing INLINE on the UI thread. That
+     * fix WORKS -- it is not in dispute -- but the stated mechanism does not survive reading this file:
+     *
+     *   - ae_apply_one allocates the decl-source block (g_decl_rebuild) and hands it to ONE owner, the live
+     *     defsub, entirely on whichever single thread called it. It is never touched by two threads in
+     *     EITHER design, so there is no second owner to do a second free.
+     *   - The serialize half hands over a plain char* we malloc'd: ae_serialize_to_json destructs every
+     *     engine object it makes (see its teardown) and copies bytes out via ae_read_idstr. No engine-owned
+     *     allocation crosses the thread boundary, so "split across two threads" moves nothing that could be
+     *     double-owned.
+     *
+     * What DID differ between the two designs is the allocating THREAD, and therefore -- via the
+     * main-thread-gated ambient heap scope (see the MEMLOCAL_* block, and MemLocalPushHeap in
+     * signatures.c, both DIRECT) -- the block's OWNING HEAP:
+     *     commit on the UI thread   -> the scope lookup no-ops -> block lands in the PROCESS heap (survives)
+     *     commit on the main thread -> the scope lookup works, and the editor keeps the MAP heap pushed
+     *                                  -> block lands in the MAP heap, which is HeapDestroy'd wholesale at
+     *                                     the next map load, leaving the defsub pointing at unmapped pages.
+     * A later teardown-time free of that block reads a header that is unmapped (AV) or recycled (cookie
+     * mismatch) -- which is EXACTLY the reported pair of symptoms, and exactly what the staged-prefab
+     * investigation already established for the same allocator (see the AE_PLAY_DIAG RESULT note).
+     *
+     * If that reading is right, the inline-on-UI-thread fix has been working by ACCIDENT -- it buys the
+     * surviving heap as a side effect of being on the wrong thread -- and the operation can be moved back
+     * onto the DOOM main thread (where the engine actually supports it) as long as the commit is wrapped in
+     * PushHeap(MEMLOCAL_HEAP_GLOBAL)/PopHeap, which buys the same heap deliberately. That is the open
+     * question this probe settles, and it is settled by ONE line in sh_backend.log from a normal build.
+     *
+     * WHAT TO LOOK FOR. On the first successful decl commit this logs the committing thread class and the
+     * owning heap of the resulting decl-source blob. Expected if the reading above is correct:
+     *     "C2 commit: thread=UI(off-main) decl-source blob heap=PROCESS (survives)"
+     * Anything reporting MAP from the UI thread, or PROCESS from the main thread, REFUTES it -- and in that
+     * case the heap is not what distinguishes the two designs and the deferral must not be revisited on
+     * this argument. One-shot (an InterlockedExchange latch), so it cannot spam a per-tick caller. */
+    if (applied) {
+        static volatile LONG s_commit_probe_done = 0;
+        if (InterlockedExchange(&s_commit_probe_done, 1) == 0) {
+            void *blob = NULL;
+            int   onmain = ae_on_main_thread();
+            (void)ae_read_ptr((const uint8_t *)defsub + DECL_BLOB_OFF, &blob);
+            char l[220];
+            _snprintf_s(l, sizeof l, _TRUNCATE,
+                        "C2 commit: thread=%s (tid=%lu) decl-source blob=%p heap=%s",
+                        onmain == 1 ? "DOOM-main" : onmain == 0 ? "UI(off-main)" : "UNKNOWN",
+                        GetCurrentThreadId(), blob, ae_block_heap_name(blob));
+            backend_log(l);
+        }
+    }
 
     /* NOTE (do NOT re-add a decl-unregister here). ae_apply_one rebuilds the decl (g_decl_rebuild); it must NOT
      * then un-register the per-entity decl via Remove_Locked (0x1801ae0). At an entity's first apply the decl is

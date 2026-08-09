@@ -35,6 +35,19 @@
 #define RVA_ERRSTATE       0x6dde19cu   /* errState  -- recovery needs ==0 */
 #define RVA_LOAD_STATE     0x6dde198u   /* load_state -- 0 boot / 2 LOADING / 3 RUNNING; !=1 always true */
 
+/* The engine's own record of its MAIN thread id, 8 bytes below the load-state word in the same cluster.
+ * This is the DWORD the allocator's scope gate at 0x19FC900 compares GetCurrentThreadId() against, so it is
+ * the engine's authoritative answer to "is this the main thread" -- DIRECT, and independently recorded on
+ * the backend side (backend/apply_engine.c MAIN_THREAD_ID_RVA, backend/signatures.c MemLocalPushHeap).
+ *
+ * The shield MUST read the engine's value rather than sampling a thread of its own: shield_install runs on
+ * the BACKEND BOOTSTRAP thread (backend/dllmain.c bootstrap_thread), not on DOOM's main thread, so a
+ * GetCurrentThreadId() taken at install time would record the wrong thread and mislabel every subsequent
+ * fault. It reads 0 until the engine records it, which callers must treat as "unknown", not as "off-main".
+ * NON-SIG-ABLE DATA GLOBAL -> recipe-tagged base+RVA literal. RE-DERIVE per build: it is the DWORD the
+ * thread-gate predicate 0x19FC900 compares against GetCurrentThreadId(). */
+#define RVA_MAIN_THREAD_ID 0x6dde190u   /* engine main-thread id (0 until engine init records it) */
+
 /* Recovery teardown / nav levers (used in Tasks 5/8; confirm live before relying). */
 #define RVA_ONDEACTIVATE   0x526570u    /* idSnapEditorLocal OnDeactivate (render-world reset path) */
 
