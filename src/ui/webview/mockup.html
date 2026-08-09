@@ -557,7 +557,7 @@
 <div class="modal-overlay" id="crashModal" style="display:none;">
   <div class="modal crash">
     <div class="crash-brandbar"><img id="crashLogo" alt=""><span class="cb-name">Snapmap+</span></div>
-    <div class="modal-title" id="crashTitle">Snapmap+ recovered from a crash</div>
+    <div class="modal-title" id="crashTitle">Snapmap+ crashed last session</div>
     <div class="muted" id="crashSub" style="margin-bottom:4px;"></div>
     <div class="crash-summary" id="crashSummary"></div>
     <div class="crash-stack" id="crashStack"></div>
@@ -2716,13 +2716,20 @@
         }
       }
     } else if (d.kind === 'crashPending') {
-      // the backend left a crash record: in-session (a survived fault seconds ago) or from a past
-      // session (the process died). Auto-open the dialog -- dismiss/send both clear it native-side.
+      // the backend left a record for a fault the game did NOT survive (the native side only sends
+      // terminal kinds here). Auto-open the dialog -- dismiss/send both clear it native-side.
       crashRecord = d.record || null;
       if (crashRecord) {
         crashPopulate(crashRecord, d.count || 1);
         if (!crashInFlight) showCrashModal(true);
       }
+    } else if (d.kind === 'faultRecovered') {
+      // the shield caught a fault and recovered -- the editor kept running, so this explains the hitch
+      // the user just felt without claiming a crash or asking for a report. The record is still on
+      // disk for diagnostics; only a fault the game did NOT survive earns the crash dialog.
+      var nrec = d.count || 1;
+      toast(nrec > 1 ? ('Recovered from ' + nrec + ' internal faults -- the editor kept running')
+                     : 'Recovered from an internal fault -- the editor kept running', 'warn');
     } else if (d.kind === 'editorSelect') {
       selectedEids = {}; var esel = d.eids || []; for (var ei=0; ei<esel.length; ei++) selectedEids[esel[ei]] = true;
       anchorEid = esel.length ? esel[esel.length-1] : -1;
@@ -3895,9 +3902,13 @@
     }
   }
   function crashPopulate(rec, count){
+    // The native side only raises this dialog for a fault the game did NOT survive, so the crash
+    // wording is the normal case. The 'classB' branch stays as a defensive fallback: if a survived
+    // record ever reaches here it must not claim the game crashed (that mislabelling is exactly what
+    // filled the tracker with reports of faults the shield had already recovered from).
     var fatal = rec.kind !== 'classB';
     document.getElementById('crashTitle').textContent =
-      fatal ? 'Snapmap+ crashed last session' : 'Snapmap+ recovered from a crash';
+      fatal ? 'Snapmap+ crashed last session' : 'Snapmap+ recovered from a fault';
     var sub = 'Help get it fixed: this report is filed as a public issue on the project tracker. Nothing is sent without your click.';
     if (count > 1) sub = count + ' crashes were recorded -- showing the latest. ' + sub;
     document.getElementById('crashSub').textContent = sub;
@@ -3923,7 +3934,11 @@
     var lines = [];
     if (desc) lines.push(desc, '');
     lines.push('--- Crash details (recorded automatically) ---');
-    lines.push('Kind: ' + (rec.kind || 'unknown'));
+    // Spell out what the kind MEANS: a bare "classB" told a triager nothing, and reports of faults the
+    // shield had already recovered from were indistinguishable from real crashes on the tracker.
+    lines.push('Kind: ' + (rec.kind || 'unknown') +
+               (rec.kind === 'classB' ? ' (fault caught and recovered -- the game kept running)'
+                                      : ' (the game process did not survive)'));
     lines.push('Fault: ' + (rec.code || '?') + ' at ' + (rec.module || '?') + '+' + (rec.rip_rva || '0x0') +
                (rec.fault_addr && rec.fault_addr !== '0x0' ? ' (data address ' + rec.fault_addr + ')' : ''));
     if (rec.time) lines.push('When: ' + rec.time);

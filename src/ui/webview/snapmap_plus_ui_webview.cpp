@@ -1554,13 +1554,22 @@ static DWORD WINAPI report_thread(LPVOID)
 /* ------------------------------------------------------------------ crash reports ------------------ */
 /* The backend's fault machinery writes one small JSON crash record per serious fault to
  * <game>\snapmap-plus\crash\pending-*.json (crash-safe, at fault time). This side is the REPORTING end:
- * the think loop polls that directory (~2 s, cheap FindFirstFile) and posts the latest record to the
- * page, which raises the crash-report dialog -- in-session when the fault was survived, on the next
- * launch when it wasn't. One mechanism, both timings. Submission rides the exact same relay POST as
- * the feedback dialog (category "crash"), with one enrichment done here: optionally attaching the
- * tails of the local logs, ANONYMIZED first (the account/profile/machine names are scrubbed -- see
- * report_scrub.h). Dismiss and a successful send both clear the pending records (never nag twice);
- * the full logs and any crash dump stay untouched on disk. */
+ * the think loop polls that directory (~2 s, cheap FindFirstFile) and decides what the user sees.
+ *
+ * NOT EVERY RECORD IS A CRASH. The record's `kind` says which happened:
+ *   - "fatal" / "engine_fatalerror" -- TERMINAL: the process died (or is dying). The crash-report
+ *     dialog is exactly right, and appears on the next launch.
+ *   - "classB" -- SURVIVED: the shield caught the fault and recovered through the engine's own
+ *     Error(6) path; the editor kept running. The user experienced a hitch, not a crash.
+ * Both used to raise the same dialog, so a recovered fault prompted "the game crashed -- send a
+ * report", and the tracker filled up with reports of faults nobody actually lost a session to. A
+ * survived fault is still real diagnostic signal, so the record is still WRITTEN and still kept on
+ * disk -- it just gets a quiet toast instead of a modal, and only mid-session (see the poll).
+ *
+ * Submission rides the exact same relay POST as the feedback dialog (category "crash"), with one
+ * enrichment done here: optionally attaching the tails of the local logs, ANONYMIZED first (the
+ * account/profile/machine names are scrubbed -- see report_scrub.h). Dismiss and a successful send
+ * both clear the pending records (never nag twice); the full logs and any crash dump stay untouched. */
 static const char *kCrashDir  = "snapmap-plus\\crash";   /* CWD = the game dir (poc_log's convention) */
 static const char *kCrashGlob = "snapmap-plus\\crash\\pending-*.json";
 #define CRASH_RECORD_READ_CAP  16384                      /* a record is ~2 KB; cap the read anyway */
@@ -1568,24 +1577,58 @@ static const char *kCrashGlob = "snapmap-plus\\crash\\pending-*.json";
 
 static bool        g_report_is_crash = false;   /* the in-flight relay POST came from the crash dialog */
 static bool        g_page_loaded     = false;   /* NavigationCompleted fired -- the page can receive */
-static std::string g_crash_last_sent;           /* latest pending-*.json already announced to the page */
+static std::string g_crash_last_sent;           /* terminal pending-*.json already raised as the dialog */
+static std::string g_crash_last_seen;           /* newest pending-*.json already classified (ANY kind) */
 
-/* Count pending records; `latest` = lexicographically-largest name (the stamp format makes that the
- * newest). Returns 0 (and clears latest) when none. */
-static int crash_scan(std::string &latest)
+/* List the pending records NEWEST FIRST (the stamp format makes lexicographic order == time order).
+ * Returns the count. Cheap by design -- FindFirstFile only, no file is opened: this runs every poll,
+ * while the records themselves are read only when the newest name actually changes. */
+static int crash_scan(std::vector<std::string> &names)
 {
     WIN32_FIND_DATAA fd;
     HANDLE h = FindFirstFileA(kCrashGlob, &fd);
-    int n = 0;
-    latest.clear();
+    names.clear();
     if (h == INVALID_HANDLE_VALUE) return 0;
     do {
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-        n++;
-        if (latest.empty() || latest < fd.cFileName) latest = fd.cFileName;
+        names.push_back(fd.cFileName);
     } while (FindNextFileA(h, &fd));
     FindClose(h);
-    return n;
+    std::sort(names.begin(), names.end(),
+              [](const std::string &a, const std::string &b) { return a > b; });
+    return (int)names.size();
+}
+
+/* Did the process NOT survive the fault this record describes? Reads the record's own `kind` field
+ * (written first by crash_record_json). Two kinds do not by themselves mean the process died:
+ *
+ *   "classB"    -- the shield's recover-in-place path: it resumed the thread into Error(6) and the
+ *                  engine's frame loop caught it.
+ *   "offthread" -- the shield DECLINED a fault on a non-main thread (see fault_shield/veh.c) and
+ *                  returned EXCEPTION_CONTINUE_SEARCH instead of forcing a throw that thread has no
+ *                  handler for. The fault is then whatever the code around it makes of it, and the
+ *                  apply path's per-item __except guards routinely absorb one and degrade to
+ *                  "0 applied" -- the process keeps running. Crucially, if nothing absorbs it and the
+ *                  process DOES die, the unhandled-exception filter writes its own separate "fatal"
+ *                  record (with a minidump) for that same fault, and THAT record prompts. So treating
+ *                  an offthread record as survivable cannot swallow a real death; it only avoids
+ *                  double-reporting one, and avoids crying crash over a fault we contained.
+ *
+ * ANY OTHER KIND, INCLUDING UNKNOWN OR UNREADABLE, COUNTS AS TERMINAL, deliberately. The two failure
+ * directions are not symmetric: mislabelling a survived fault as terminal costs one unwanted dialog,
+ * while mislabelling a real crash as survived silently swallows the only prompt the user ever gets. A
+ * future kind added on the writing side therefore keeps working (it prompts) until it is explicitly
+ * listed here -- and a new kind must only be listed once something else is known to report the death. */
+static bool crash_record_is_terminal(const std::string &rec)
+{
+    const char *p = strstr(rec.c_str(), "\"kind\"");
+    if (!p) return true;
+    p += 6;
+    while (*p == ' ' || *p == ':') p++;
+    if (*p != '"') return true;
+    p++;
+    return strncmp(p, "classB\"", 7) != 0 &&
+           strncmp(p, "offthread\"", 10) != 0;
 }
 
 static std::string crash_read_record(const std::string &name)
@@ -2146,31 +2189,68 @@ static void poc_think_loop()
             if (g_report_is_crash) {
                 /* a successfully-sent crash report is handled -- clear the pending records (same as
                  * Dismiss); a failed send keeps them, so the dialog can retry / reappear next launch. */
-                if (g_report_ok) { crash_clear_pending(); g_crash_last_sent.clear(); }
+                if (g_report_ok) { crash_clear_pending(); g_crash_last_sent.clear(); g_crash_last_seen.clear(); }
                 g_report_is_crash = false;
             }
             g_report_inflight = false;
         }
 
-        /* crash-record poll (~2 s): announce the LATEST pending record to the page exactly once per
-         * record. Covers both timings with one mechanism -- records found at startup (the process died
-         * last session) and records appearing mid-session (a survived Class-B fault seconds ago). */
+        /* crash-record poll (~2 s): classify the pending records and announce at most one thing per
+         * new record. TERMINAL records raise the crash dialog exactly as they always have -- a user
+         * whose game actually died is prompted unchanged. A SURVIVED (Class-B) record gets a quiet
+         * toast instead, and only when it lands MID-SESSION: found at startup it describes a hitch in
+         * a session that has already ended, so there is nothing for the user to act on and the record
+         * just stays on disk as diagnostics.
+         *
+         * Walking the whole list newest-first (rather than looking only at the single newest name)
+         * is load-bearing now that the two outcomes are treated differently: a survived fault landing
+         * after a real crash record would otherwise sit in front of it and MASK the one prompt that
+         * mattered. Scanning names is cheap; records are opened only when the newest name changes. */
         if (g_page_loaded && (frame == 1 || frame % 60 == 0)) {
-            std::string latest;
-            int cnt = crash_scan(latest);
-            if (cnt > 0 && latest != g_crash_last_sent) {
-                std::string rec = crash_read_record(latest);
-                if (!rec.empty()) {
-                    g_crash_last_sent = latest;
-                    std::string m = "{\"kind\":\"crashPending\",\"count\":" + std::to_string(cnt) +
-                                    ",\"record\":" + rec + "}";
+            std::vector<std::string> names;
+            int cnt = crash_scan(names);
+            if (cnt == 0) {
+                /* cleared (Dismiss, a sent report, or by hand) -- forget what we announced so the
+                 * directory filling up again is treated as new rather than as already-seen. */
+                g_crash_last_seen.clear();
+                g_crash_last_sent.clear();
+            } else if (names[0] != g_crash_last_seen) {
+                bool startup = (frame == 1);
+                int terminal = 0, survived = 0;
+                std::string termName, termRec;
+                g_crash_last_seen = names[0];
+                for (size_t i = 0; i < names.size(); i++) {
+                    std::string rec = crash_read_record(names[i]);
+                    if (rec.empty()) continue;   /* torn/unreadable -- skip it, never block the rest */
+                    if (crash_record_is_terminal(rec)) {
+                        if (terminal == 0) { termName = names[i]; termRec = rec; }
+                        terminal++;
+                    } else {
+                        survived++;
+                    }
+                }
+                if (terminal > 0 && termName != g_crash_last_sent) {
+                    g_crash_last_sent = termName;
+                    std::string m = "{\"kind\":\"crashPending\",\"count\":" + std::to_string(terminal) +
+                                    ",\"record\":" + termRec + "}";
                     int wl = MultiByteToWideChar(CP_UTF8, 0, m.c_str(), -1, nullptr, 0);
                     if (wl > 0) {
                         std::wstring wm; wm.resize(wl - 1);
                         if (wl > 1) MultiByteToWideChar(CP_UTF8, 0, m.c_str(), -1, &wm[0], wl);
                         poc_post_json(wm.c_str());
-                        poc_logf("crash: pending record announced (count=%lu)", (unsigned long)cnt);
+                        char l[160];
+                        _snprintf_s(l, sizeof l, _TRUNCATE,
+                                    "crash: terminal record announced (terminal=%d, survived=%d)",
+                                    terminal, survived);
+                        poc_log(l);
                     }
+                } else if (survived > 0 && terminal == 0 && !startup) {
+                    /* recovered fault, this session: a toast, no dialog, nothing to submit. */
+                    std::wstring m = L"{\"kind\":\"faultRecovered\",\"count\":";
+                    m += std::to_wstring(survived); m += L"}";
+                    poc_post_json(m.c_str());
+                    poc_logf("crash: %lu recovered fault record(s) -- toast only, no dialog",
+                             (unsigned long)survived);
                 }
             }
         }

@@ -13,7 +13,11 @@
 #include <stddef.h>
 
 typedef struct crash_record {
-    const char *kind;         /* "fatal" | "classB" | "engine_fatalerror" */
+    /* "fatal" | "classB" | "engine_fatalerror" | "offthread".
+     * The frontend splits these into "the process died" (prompt for a report) versus "the fault was
+     * contained" (quiet notice) -- see crash_record_is_terminal in the webview frontend. "classB" and
+     * "offthread" are the contained ones; adding a kind here means deciding which side it falls on. */
+    const char *kind;
     unsigned long code;       /* exception code (0 if not a hardware fault) */
     unsigned long long rip_rva;    /* faulting rip - module base (0 if unknown) */
     unsigned long long fault_addr; /* faulting data address (0 if none) */
