@@ -11,6 +11,7 @@
 #   crash_record_test   -- the crash-record JSON formatter + escaping (pure logic)
 #   report_scrub_test   -- the crash-report log anonymization scrub + tail (pure logic)
 #   dumpmap_path_test   -- sh_dumpmap's output-path resolution (pure logic)
+#   json_pretty_test    -- sh_pretty_on's rawmap JSON re-layout: document preserved, refusals (pure logic)
 #   config_json_test    -- bounded JSON grammar, duplicate keys, preservation + serialization
 #   iface_config_test   -- append-only config slot layout + dedicated binder isolation
 #   config_test         -- config lifecycle, validation, recovery, atomic faults + concurrency
@@ -48,6 +49,7 @@ $tests = @(
     @{ name = "crash_record_test";  src = 'crash_record_test.c ..\src\fault_shield\crash_record_format.c'; arg = "" }
     @{ name = "report_scrub_test";  src = 'report_scrub_test.c';                                     arg = "" }
     @{ name = "dumpmap_path_test";  src = 'dumpmap_path_test.c';                                     arg = "" }
+    @{ name = "json_pretty_test";   src = 'json_pretty_test.c';                                      arg = "" }
     @{ name = "config_json_test";   src = 'config_json_test.c ..\src\backend\config_json.c';         arg = "" }
     @{ name = "iface_config_test";  src = 'iface_config_test.c ..\src\common\snapmap_plus_iface.c';   arg = "" }
     @{ name = "config_test";        src = 'config_test.c ..\src\backend\config.c ..\src\backend\config_json.c ..\src\common\snapmap_plus_iface.c'; defs = '/DSH_CONFIG_TESTING'; libs = 'shell32.lib ole32.lib'; arg = "" }

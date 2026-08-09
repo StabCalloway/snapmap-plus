@@ -280,6 +280,10 @@ unsigned long sh_rawmap_swap_count(void)
  * ARMED means the same `rawmap_armed()` the LOAD swap uses -- the shadow is the save half of one switch,
  * not an always-on mirror. The engine's own serialize is never gated; only the copy to disk is.
  *
+ * `sh_pretty_on` re-lays-out the bytes on their way to disk (json_pretty.h). Same reasoning as the arm:
+ * the cvar governs the rawmap this project writes, so it applies where those bytes are chosen -- HERE --
+ * and not to the engine's out-idStr, which is what the player's own save is written from.
+ *
  * Why this is safe to slot in front of the engine fn: the detour has the EXACT prototype of the target
  * (void(idSnapMap*, idStr*, uint8)), so the stolen-prologue trampoline preserves the engine's calling
  * convention; we change nothing about the serialize itself -- we only READ the engine's output idStr and
@@ -295,6 +299,8 @@ unsigned long sh_rawmap_swap_count(void)
 #include "rawmap.h"
 #include "hook.h"
 #include "backend_log.h"
+#include "cvars.h"        /* sh_cvar_value_int / B2_CVAR_SH_PRETTY_ON -- the shadow's pretty switch */
+#include "json_pretty.h"  /* json_pretty -- the pure whitespace re-layout that switch selects */
 
 /* SerializeToJson prologue steal window. Decoded from the live engine prologue (DOOM RVA 0x5F2390,
  * ratified 2026-06-20 against the unpacked exe):
@@ -368,6 +374,29 @@ static unsigned long long write_shadow(const char *data, size_t len)
     return (total == len) ? total : 0;   /* a short write -> report failure (don't leave a partial shadow) */
 }
 
+/* sh_pretty_on: lay the engine's one-line JSON out over indented lines for the shadow copy. Returns a
+ * fresh heap buffer (caller HeapFrees) + *out_len, or NULL to mean "write the engine bytes unchanged" --
+ * which covers both a refusal from json_pretty (see its header: it fails closed rather than truncate)
+ * and an allocation failure. NULL is never an error worth failing the shadow over: an unreadable rawmap
+ * still loads, so the layout is the part we drop, never the write.
+ *
+ * Reads `data`, which is the engine's out-idStr buffer -- the caller keeps this inside its SEH guard. */
+static char *pretty_copy(const char *data, size_t len, size_t *out_len)
+{
+    size_t need = json_pretty(data, len, NULL, 0);   /* pass 1: measure (no store) */
+    char  *buf;
+    if (need == 0) return NULL;
+    buf = (char *)HeapAlloc(GetProcessHeap(), 0, need);
+    if (buf == NULL) return NULL;
+    if (json_pretty(data, len, buf, need) != need) { /* pass 2: store. Deterministic -- a mismatch is impossible
+                                                     * unless the source moved under us; treat it as a refusal. */
+        HeapFree(GetProcessHeap(), 0, buf);
+        return NULL;
+    }
+    *out_len = need;
+    return buf;
+}
+
 /* The detour. Same prototype as the engine target. Call the engine ORIGINAL first (the real save fills
  * `out`), then read `out` and mirror it to rawmap.json. The shadow write is best-effort + fully guarded:
  * the real save has already happened by the time we touch disk. */
@@ -399,19 +428,43 @@ static void sh_ser_detour(void *map, void *out_idstr, unsigned char compact)
     }
     if (data == NULL || len <= 0) return;
 
+    /* 3) sh_pretty_on chooses the LAYOUT of the copy. Read live per save (it is a cvar a user flips
+     *    mid-session, not a startup choice) and default OFF, which is also what a failed cvar register
+     *    reports -- so an engine we could not register into simply writes what it always wrote. */
+    int pretty = sh_cvar_value_int(B2_CVAR_SH_PRETTY_ON, 0);
+
+    const char *body     = data;                     /* what actually goes to disk ... */
+    size_t      body_len = (size_t)len;              /* ... the engine's bytes, or our re-laid-out copy */
+    char       *shaped   = NULL;
+
+    if (pretty) {
+        size_t shaped_len = 0;
+        __try {
+            shaped = pretty_copy(data, (size_t)len, &shaped_len);   /* reads the engine's buffer */
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            shaped = NULL;
+        }
+        if (shaped != NULL) { body = shaped; body_len = shaped_len; }
+    }
+    int laid_out = (shaped != NULL);
+
     unsigned long long wrote = 0;
     __try {
-        wrote = write_shadow(data, (size_t)len);   /* reads `data` (engine heap/SSO) -> guard the read */
+        wrote = write_shadow(body, body_len);   /* may read `data` (engine heap/SSO) -> guard the read */
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         wrote = 0;
     }
+    if (shaped != NULL) HeapFree(GetProcessHeap(), 0, shaped);
 
     if (wrote > 0) {
         InterlockedExchange64(&g_last_bytes, (LONGLONG)wrote);
         unsigned long n = (unsigned long)InterlockedIncrement(&g_shadow_count);
         char line[160];
         _snprintf_s(line, sizeof line, _TRUNCATE,
-            "B1: rawmap SAVE shadow wrote %llu bytes -> rawmap.json [#%lu]", wrote, n);
+            "B1: rawmap SAVE shadow wrote %llu bytes -> rawmap.json [#%lu]%s", wrote, n,
+            pretty ? (laid_out ? " [pretty]"
+                               : " [pretty requested; JSON did not re-lay-out -- wrote it unchanged]")
+                   : "");
         backend_log(line);
     }
 }

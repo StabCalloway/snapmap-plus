@@ -104,11 +104,18 @@ unsigned long sh_rawmap_swap_count(void);
  * engine serializer fills `out` either way). It is exactly what the proven reference implementation does
  * (the reference _saveHook: capture args[1] onEnter, read len@0x8/data@0x10 onLeave, write).
  *
- * Unlike the LOAD swap there is NO arm gate: OG writes the shadow on EVERY save (the only gate OG has on
- * the WHOLE rawmap feature is snapHak_rawmaps_on, which gates LOAD substitution; the save-shadow handler
- * has no flag check -- it always writes when the map serializes). The shadow is failure-tolerant: any
- * file op that fails simply skips the shadow write; the real save (the engine original's fill of `out`)
- * has already happened, so a shadow failure NEVER blocks or corrupts the real save.
+ * OG writes the shadow on EVERY save -- the only gate OG has on the whole rawmap feature is
+ * snapHak_rawmaps_on, which gates LOAD substitution and never the save handler. We diverge deliberately
+ * (the arm note above): one switch named "raw map save/load" governs both directions here.
+ *
+ * `sh_pretty_on` picks the LAYOUT of the copy: set, the JSON is re-laid-out over indented lines
+ * (json_pretty.h -- a whitespace-only pass, same tokens in the same order) on its way to disk. It
+ * changes this file and nothing else. The engine's out-idStr -- what the player's own save is written
+ * from -- is never re-laid-out, for the same reason the arm is checked after the real serialize.
+ *
+ * The shadow is failure-tolerant: any file op that fails simply skips the shadow write; the real save
+ * (the engine original's fill of `out`) has already happened, so a shadow failure NEVER blocks or
+ * corrupts the real save. A rawmap that will not lay out is written unchanged rather than mangled.
  *
  * Clean-room: ported from our own RE (the truth above + the OG decompile) + the proven reference
  * reimplementation. Zero OG SnapHak bytes.
