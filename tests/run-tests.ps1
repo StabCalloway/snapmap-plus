@@ -21,6 +21,10 @@
 #   theme_bootstrap_test -- pre-navigation dark-class injection (pure C++ helper)
 #   theme_contract_test -- native/preview theme bridge contract in the embedded HTML source
 #   entity_settings_contract_test -- persisted Entities controls + exclusive selection-mode contract
+#   growing_text_buffer_test -- large declaration reads, exact boundary, and explicit safety-cap signal
+# The JS checks run after the native suite:
+#   decl_overlay_test -- syntax-paint/text alignment for the Entity State editor
+#   decl_index_order_test -- numeric item[n] presentation, nesting, and 1000-boundary regression
 # -Doom <unpacked DOOMx64vk.exe>: ALSO the signature-resolver tests, which scan a real
 #   (Steamless-unpacked) DOOM image:
 #   sig_test            -- every engine signature resolves to its known RVA
@@ -59,6 +63,7 @@ $tests = @(
     @{ name = "theme_bootstrap_test"; src = 'theme_bootstrap_test.cpp ..\src\ui\webview\theme_bootstrap.cpp'; cxx = $true; arg = "" }
     @{ name = "theme_contract_test"; src = 'theme_contract_test.c'; arg = (Join-Path $here '..\src\ui\webview\mockup.html') }
     @{ name = "entity_settings_contract_test"; src = 'entity_settings_contract_test.c'; arg = (Join-Path $here '..\src\ui\webview\mockup.html') }
+    @{ name = "growing_text_buffer_test"; src = 'growing_text_buffer_test.cpp'; cxx = $true; arg = "" }
 )
 if ($Doom) {
     if (-not (Test-Path $Doom)) { throw "-Doom path not found: $Doom" }
@@ -87,3 +92,13 @@ foreach ($t in $tests) {
 }
 if ($fail -gt 0) { Write-Host ""; Write-Host "$fail native test(s) FAILED"; exit 1 }
 Write-Host ""; Write-Host "all native tests passed ($($tests.Count))"
+
+$node = Get-Command node -ErrorAction SilentlyContinue
+if (-not $node) { Write-Host "[FAIL] node not found (required for decl editor tests)"; exit 1 }
+$jsTests = @("decl_overlay_test.js", "decl_index_order_test.js")
+foreach ($jsTest in $jsTests) {
+    & $node.Source (Join-Path $here $jsTest)
+    if ($LASTEXITCODE -ne 0) { Write-Host "[FAIL] $jsTest (exit $LASTEXITCODE)"; exit 1 }
+    Write-Host "[ok]   $jsTest"
+}
+Write-Host "all JavaScript tests passed ($($jsTests.Count))"

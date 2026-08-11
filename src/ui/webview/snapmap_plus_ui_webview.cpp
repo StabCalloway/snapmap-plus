@@ -36,6 +36,7 @@
 #include "snapmap_plus_iface.h"
 #include "mockup_html.h"
 #include "config_message.h"
+#include "growing_text_buffer.h"
 #include "theme_bootstrap.h"
 #include "report_scrub.h"   /* pure anonymization scrub + tail for the crash-report log attachment */
 #include "../sh_entity_desc.h" /* GENERATED: OUR RE-extracted Inherit/Classname descriptions (same table sh_tabs.cpp uses) */
@@ -68,6 +69,14 @@ static int           g_last_editor_sel = -1;    /* reverse-apply guard */
 static uint64_t      g_last_list_sig  = 0;
 static uint64_t      g_last_state_sig = 0;
 static uint64_t      g_last_sel_sig   = 0;       /* forward-sync: last editor-selection signature */
+
+/* Entity declarations produced by large generated Timelines routinely exceed the old 64 KiB scratch
+ * buffer. Keep one reusable buffer and grow it on demand; the periodic state poll then pays no repeated
+ * allocation cost. The 32 MiB ceiling is a UI safety boundary, not a silent clipping point -- hitting it
+ * is reported to the page and the partial declaration is never made editable. */
+#define POC_DECL_INITIAL_CAP (64u * 1024u)
+#define POC_DECL_MAX_CAP     (32u * 1024u * 1024u)
+static std::vector<char> g_state_decl;
 
 static volatile bool g_pending_save = false;
 static int           g_save_eid     = -1;
@@ -424,6 +433,16 @@ static bool poc_collect_state(int id, char *decl, int dcap, char *cls, int ccap,
         ok = true;
     } __except (EXCEPTION_EXECUTE_HANDLER) { ok = false; }
     return ok;
+}
+static bool poc_collect_state_growing(int id, char *cls, int ccap, char *inh, int icap,
+                                      char *dnm, int ncap, bool *truncated)
+{
+    return sh_read_growing_text(
+        g_state_decl, POC_DECL_INITIAL_CAP, POC_DECL_MAX_CAP,
+        [&](char *decl, int dcap) {
+            return poc_collect_state(id, decl, dcap, cls, ccap, inh, icap, dnm, ncap);
+        },
+        truncated);
 }
 static void poc_post_json(const wchar_t *json);   /* fwd */
 
@@ -986,15 +1005,17 @@ static void poc_send_list()
 static void poc_send_state(int id, bool autoflag)
 {
     if (!g_webview) return;
-    static char decl[65536]; char cls[512], inh[512], dnm[512];
-    bool ok = poc_collect_state(id, decl, sizeof decl, cls, sizeof cls, inh, sizeof inh, dnm, sizeof dnm);
+    char cls[512], inh[512], dnm[512]; bool truncated = false;
+    bool ok = poc_collect_state_growing(id, cls, sizeof cls, inh, sizeof inh, dnm, sizeof dnm, &truncated);
+    const char *decl = g_state_decl.empty() ? "" : g_state_decl.data();
     uint64_t sig = hstr(hstr(hstr(hstr(1469598103934665603ull, decl), cls), inh), dnm) ^ (uint64_t)id;
     if (autoflag && sig == g_last_state_sig) return;   /* nothing changed -> skip the auto push */
     g_last_state_sig = sig;
     std::wstring json = L"{\"kind\":\"state\",\"auto\":"; json += autoflag ? L"true" : L"false";
     json += L",\"eid\":"; json += std::to_wstring(id);
     json += L",\"ok\":"; json += ok ? L"true" : L"false";
-    json += L",\"decl\":\"";        json += poc_json_w(decl); json += L"\"";
+    json += L",\"truncated\":"; json += truncated ? L"true" : L"false";
+    json += L",\"decl\":\"";        if (!truncated) json += poc_json_w(decl); json += L"\"";
     json += L",\"classname\":\"";   json += poc_json_w(cls);  json += L"\"";
     json += L",\"inherit\":\"";     json += poc_json_w(inh);  json += L"\"";
     json += L",\"displayname\":\""; json += poc_json_w(dnm);  json += L"\"}";

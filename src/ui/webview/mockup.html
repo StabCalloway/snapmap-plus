@@ -1131,6 +1131,126 @@
     return toks;
   }
 
+  // The engine's canonical text map orders string keys lexicographically, so a large indexed list arrives
+  // as item[0], item[1000], item[1001], ... item[100], ... item[1]. The indices are intact, but presenting
+  // that storage order in the Entity State editor makes a complete Timeline look as though it jumped over
+  // hundreds of events. Reorder only contiguous sibling runs with the same indexed-key base. Token spans
+  // make braces inside strings/comments harmless, and each run replacement preserves its exact byte length
+  // so nested runs can be normalized from the inside out without invalidating parent offsets.
+  function naturalizeIndexedDecl(text) {
+    if (!text || text.indexOf('[') === -1) return text;
+    var all = tokenizeDecl(text);
+    var sig = [];
+    for (var ai = 0; ai < all.length; ai++) if (all[ai].type !== 'cmt') sig.push(all[ai]);
+    if (!sig.length) return text;
+
+    var scopes = [{id:0, depth:0, open:-1, close:sig.length}];
+    var scopeStack = [0], scopeOf = [], braceMate = {};
+    for (var i = 0; i < sig.length; i++) {
+      var token = sig[i];
+      scopeOf[i] = scopeStack[scopeStack.length - 1];
+      if (token.text === '{') {
+        var child = {id:scopes.length, depth:scopeStack.length, open:i, close:-1};
+        scopes.push(child);
+        scopeStack.push(child.id);
+      } else if (token.text === '}' && scopeStack.length > 1) {
+        var childId = scopeStack.pop();
+        scopes[childId].close = i;
+        braceMate[scopes[childId].open] = i;
+      }
+    }
+
+    var candidates = [];
+    for (var ti = 0; ti < sig.length; ti++) {
+      var keyToken = sig[ti];
+      if (keyToken.type !== 'ident' && keyToken.type !== 'str') continue;
+      var keyText = keyToken.text;
+      if (keyToken.type === 'str' && keyText.length >= 2) keyText = keyText.slice(1, -1);
+      var indexed = /^(.*)\[([0-9]+)\]$/.exec(keyText);
+      if (!indexed || !indexed[1]) continue;
+
+      var valueAt = ti + 1;
+      if (!sig[valueAt] || (sig[valueAt].text !== '=' && sig[valueAt].text !== '{')) continue;
+      if (sig[valueAt].text === '=') valueAt++;
+      if (sig[valueAt] && sig[valueAt].text === '!') valueAt++;
+      if (!sig[valueAt]) continue;
+
+      var endSig = -1;
+      if (sig[valueAt].text === '{') {
+        if (braceMate[valueAt] === undefined) continue;
+        endSig = braceMate[valueAt];
+        if (sig[endSig + 1] && sig[endSig + 1].text === ';') endSig++;
+      } else {
+        for (var scan = valueAt; scan < sig.length; scan++) {
+          if (scopeOf[scan] !== scopeOf[ti]) continue;
+          if (sig[scan].text === ';') { endSig = scan; break; }
+          if (sig[scan].text === '}') break;
+        }
+      }
+      if (endSig < valueAt) continue;
+      candidates.push({
+        scope: scopeOf[ti],
+        depth: scopes[scopeOf[ti]].depth,
+        base: indexed[1],
+        index: parseInt(indexed[2], 10),
+        tokenAt: ti,
+        endSig: endSig,
+        start: keyToken.start,
+        end: sig[endSig].end
+      });
+    }
+
+    var lists = {};
+    for (var ci = 0; ci < candidates.length; ci++) {
+      var listKey = candidates[ci].scope + '\u0000' + candidates[ci].base;
+      if (!lists[listKey]) lists[listKey] = [];
+      lists[listKey].push(candidates[ci]);
+    }
+    var runs = [];
+    for (var lk in lists) {
+      var siblings = lists[lk], run = [];
+      siblings.sort(function(a, b) { return a.tokenAt - b.tokenAt; });
+      for (var li = 0; li <= siblings.length; li++) {
+        var current = li < siblings.length ? siblings[li] : null;
+        var previous = run.length ? run[run.length - 1] : null;
+        if (!current || (previous && current.tokenAt !== previous.endSig + 1)) {
+          if (run.length > 1) {
+            var needsSort = false;
+            for (var ri = 1; ri < run.length; ri++)
+              if (run[ri - 1].index > run[ri].index) { needsSort = true; break; }
+            if (needsSort) runs.push(run);
+          }
+          run = [];
+        }
+        if (current) run.push(current);
+      }
+    }
+    if (!runs.length) return text;
+
+    runs.sort(function(a, b) {
+      return b[0].depth - a[0].depth || b[0].start - a[0].start;
+    });
+    var normalized = text;
+    for (var r = 0; r < runs.length; r++) {
+      var slots = runs[r], bodies = [], gaps = [];
+      for (var si = 0; si < slots.length; si++) {
+        bodies.push(normalized.slice(slots[si].start, slots[si].end));
+        if (si + 1 < slots.length) gaps.push(normalized.slice(slots[si].end, slots[si + 1].start));
+      }
+      var order = [];
+      for (var oi = 0; oi < slots.length; oi++) order.push(oi);
+      order.sort(function(a, b) { return slots[a].index - slots[b].index || a - b; });
+      var replacement = '';
+      for (var pi = 0; pi < order.length; pi++) {
+        replacement += bodies[order[pi]];
+        if (pi < gaps.length) replacement += gaps[pi];
+      }
+      normalized = normalized.slice(0, slots[0].start) + replacement +
+                   normalized.slice(slots[slots.length - 1].end);
+    }
+    return normalized;
+  }
+
   // -- parser: entries of `key = value;` / `key { ... }`; value = { block } | ( tuple ) |
   //    scalar | bare multi-scalar (`size = 32 32 32;`) | `! { ... }` (override-block prefix).
   //    Wrappers (`entityDef <name> { ... }`, a bare outer `{ ... }`) parse as normal entries.
@@ -2546,15 +2666,22 @@
   }
   function showState(d) {
     acClose();   // selection changed -- drop any completion popup from the previous entity
+    if (!d.ok || d.truncated) {
+      showPlaceholder(d.truncated
+        ? 'This entity declaration exceeds the 32 MiB editor safety limit and was not opened.<br><span style="opacity:0.75;">The declaration remains unchanged in the map.</span>'
+        : 'Could not read this entity state.');
+      return;
+    }
+    var decl = naturalizeIndexedDecl(d.decl || '');
     document.getElementById('selInfo').style.display='none';
     document.getElementById('editor').style.display='flex';
     loadedEid = d.eid;
     document.getElementById('fEntityId').value = entityIdString(d.eid);
-    document.getElementById('declText').value = d.decl || '';
+    document.getElementById('declText').value = decl;
     document.getElementById('fInherit').value = d.inherit || '';
     document.getElementById('fClassname').value = d.classname || '';
     document.getElementById('fDisplayname').value = d.displayname || '';
-    loaded = { decl:d.decl||'', inherit:d.inherit||'', classname:d.classname||'', displayname:d.displayname||'' };
+    loaded = { decl:decl, inherit:d.inherit||'', classname:d.classname||'', displayname:d.displayname||'' };
     refreshDecl();   // programmatic .value writes fire no 'input' event -- re-tokenize/lint/paint explicitly
     updateDirty();
     if (!inheritsRequested) { inheritsRequested = true; post({cmd:'enumInherits'}); }  // full inherit list, once
@@ -2684,6 +2811,10 @@
       closeEntityEditor();
     } else if (d.kind === 'state') {
       if (d.eid !== primaryEid) return;
+      // A failed/over-limit refresh cannot safely coexist with an editable stale snapshot. Close the
+      // editor even when it is dirty so Save cannot overwrite an authoritative declaration we could
+      // not read in full.
+      if (!d.ok || d.truncated) { showState(d); return; }
       if (!d.auto) { showState(d); return; }   // explicit (non-auto) refresh always applies
       if (!isDirty()) { showState(d); return; }   // panel clean -- apply the whole snapshot as before
       // Panel is dirty (an in-progress local edit to at least one field) -- don't clobber anything the
