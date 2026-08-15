@@ -13,8 +13,9 @@ dist/
 *.log
 *.syso
 
-# Local Claude Code config (per-machine; not part of the public package)
-.claude/
+# Keep the shared Claude instructions; ignore all other local agent state.
+.claude/*
+!.claude/CLAUDE.md
 .codex/
 
 # Personal local-dev convenience scripts (not for upstream)

@@ -92,10 +92,10 @@ jobs:
       - name: Build the changelog from the commit log
         shell: bash
         run: |
-          # The release BODY is the commit subjects since the previous version tag -- plain text, no links,
-          # so `snapmap-plus changelog` can print it straight to the console (readable even while the repo is
-          # private). GitHub's own generate_release_notes is PR-based; releases here are cut by tagging main
-          # directly (no PRs), so it produces only a "Full Changelog" link -- not what we want.
+          # The release body uses each user-facing commit's full body as its changelog note. Commit bodies are
+          # written as one to three natural sentences; line wrapping is collapsed so GitHub, the website, and
+          # `snapmap-plus changelog` all receive the same readable bullet. Older commits without a body fall
+          # back to their subject.
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
           prev="$(git describe --tags --abbrev=0 --match 'v*' "${tag}^" 2>/dev/null || true)"
@@ -107,15 +107,25 @@ jobs:
             range="${tag}"
           fi
           echo "" >> notes.md
-          # Commit SUBJECTS only (%s omits body/trailers). Two defensive filters:
-          #  1) drop internal commit types (ci/chore/scrub/docs/tests/release/refactor/build/style) -- they are
-          #     not user-facing AND are where internal tooling terminology would otherwise surface publicly;
-          #  2) strip any authoring attribution.
-          # `|| true` keeps an all-filtered range from failing the step under `set -o pipefail`.
-          git log --no-merges --pretty=format:'- %s' "$range" \
-            | grep -viE '^- (ci|chore|scrub|docs|tests?|release|refactor|build|style|meta): ' \
-            | grep -viE 'co-authored-by|generated with claude|claude\.com/claude-code|noreply@anthropic|🤖' \
-            >> notes.md || true
+          git rev-list --reverse --no-merges "$range" | while IFS= read -r commit; do
+            subject="$(git show -s --format='%s' "$commit")"
+            if printf '%s\n' "$subject" \
+              | grep -qiE '^(ci|chore|scrub|docs|tests?|release|refactor|build|style|meta): '; then
+              continue
+            fi
+
+            body="$(git show -s --format='%b' "$commit" \
+              | grep -viE '^co-authored-by:|^signed-off-by:|generated with claude|claude\.com/claude-code|noreply@anthropic' \
+              || true)"
+            note="$(printf '%s\n' "$body" | awk '
+              NF { if (text != "") text = text " "; text = text $0 }
+              END { gsub(/[[:space:]]+/, " ", text); print text }
+            ')"
+            if [ -z "$note" ]; then
+              note="$subject"
+            fi
+            printf -- '- %s\n' "$note" >> notes.md
+          done
           echo "" >> notes.md
       - name: Attest build provenance (the published artifacts)
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1

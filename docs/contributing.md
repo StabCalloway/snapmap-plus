@@ -198,8 +198,11 @@ CI runs the twelve self-contained native tests and the installer tests on every 
    extension slots for why a backend/frontend version mismatch is a real failure mode, not a theoretical one.
 4. **Run the tests** (section 7) — both the Go and C suites.
 5. **Update the docs** your change affects (section 9).
-6. **Commit** with a clear, imperative message that names the area, e.g.
-   `installer: fix Steam library path detection` or `backend: add sh_listwires command`.
+6. **Commit** with a clear, imperative subject; a simple area prefix such as `installer:` or `backend:` is
+   fine. Follow it with a natural body of one to three complete sentences explaining what changed and how
+   Snapmap+ will behave differently. The release process publishes that body in the public changelog, so
+   write it for people rather than as internal shorthand, labeled fields, a checklist, or generated boilerplate.
+   Do not add agent/tool attribution or generated-by trailers.
 7. **Push** to your fork and open a **pull request against `main`**.
 8. The **CI gate** runs automatically, as two parallel jobs: a security scan (no-new-binaries ·
    capability-surface scan · gitleaks); and the build (`build.ps1` / `package.ps1`, a bundle guard that
@@ -209,6 +212,13 @@ CI runs the twelve self-contained native tests and the installer tests on every 
 9. A **maintainer reviews** and merges (changes under `.github/`, `*.ps1`, and `installer/` are
    CODEOWNERS-gated). Releases are cut from reviewed, tagged commits — see the README's
    ["Versioning & releases"](../README.md#versioning--releases).
+
+Before merging, the maintainer reads the complete pull request: its description, every commit message, the
+full diff, review discussion, linked issues, and reported validation. Coherent commits are rebased and
+preserved. Fixup-heavy history may be squashed, but the resulting subject and one-to-three-sentence body must
+summarize the entire pull request rather than merely copying its title. A merge commit is reserved for cases
+where retaining the original commit IDs or branch topology has concrete value. Every merge method must
+preserve the contributor's authorship and credit.
 
 ## 9. Keep the docs in sync (required)
 
