@@ -59,15 +59,16 @@ static unsigned g_levelAxis[MAX_LEVELS];
 static unsigned g_levelBase[MAX_LEVELS];
 
 typedef struct {
-    char     name[192];
+    const char *name;
     unsigned x, y, w, h;
 } vmtr_rect;
 
 typedef struct {
     FILE               *f;
-    unsigned           *index;      /* idxCount x u32: cell -> page id, 0xFFFFFFFF = absent        */
+    unsigned long long  fileBytes;
+    unsigned long long  tableOff;   /* pageCount x { u64 offset, u64 size }                        */
+    unsigned long long  indexOff;   /* idxCount x u32: cell -> page id                             */
     unsigned            idxCount;
-    unsigned long long *table;      /* pageCount x { u64 offset, u64 size }                        */
     unsigned            pageCount;
     int                 tried;      /* so a missing/corrupt shard is only reported once            */
 } shard_t;
@@ -76,14 +77,42 @@ static const uint8_t *g_base;
 static decode_fn      g_decode;
 static vmtr_rect     *g_rects;
 static int            g_rectCount;
+static int            g_rectCap;
+static char          *g_rectNames;
+static size_t         g_rectNameBytes;
 static shard_t        g_shard[17];          /* 1-based, shards 1..16                              */
 static unsigned char *g_out;                /* OUT_SIZE decode target                             */
 static unsigned char *g_page;               /* PAGE_MAX + PAGE_SLACK, zero-tailed                 */
 static unsigned char *g_levelTmp[MAX_LEVELS];  /* per-level 120x120 RGBA scratch for mip fallback */
 static CRITICAL_SECTION g_lock;             /* serializes the shared scratch above                */
 static LONG           g_installed;
+static HANDLE         g_requestEvent;        /* worker sleeps until slot_request_preview signals  */
 
 static char           g_vtDir[MAX_PATH];
+
+static void megapreview_free_scratch(void)
+{
+    free(g_out); g_out = NULL;
+    free(g_page); g_page = NULL;
+    for (int L = 0; L < MAX_LEVELS; ++L) {
+        free(g_levelTmp[L]);
+        g_levelTmp[L] = NULL;
+    }
+}
+
+static int megapreview_alloc_scratch(void)
+{
+    if (g_out && g_page) return 1;
+    megapreview_free_scratch();
+    g_out  = (unsigned char *)malloc(OUT_SIZE);
+    g_page = (unsigned char *)malloc(PAGE_MAX + PAGE_SLACK);
+    if (!g_out || !g_page) { megapreview_free_scratch(); return 0; }
+    for (int L = 0; L < MAX_LEVELS; ++L) {
+        g_levelTmp[L] = (unsigned char *)malloc(PAGE_CORE * PAGE_CORE * 4);
+        if (!g_levelTmp[L]) { megapreview_free_scratch(); return 0; }
+    }
+    return 1;
+}
 
 /* ---------------------------------------------------------------------- file plumbing -----------*/
 
@@ -103,7 +132,7 @@ static int megapreview_vt_dir(void)
  *     x y width height flags timeStamp mtrCheck "name"
  * with mtrCheck frequently negative. Anything that does not match that shape is skipped, which
  * covers the header lines without needing to count them. */
-static void megapreview_load_one_vmtr(const char *path, int *cap)
+static void megapreview_load_one_vmtr(const char *path)
 {
     FILE *f = fopen(path, "r");
     if (!f) return;
@@ -115,17 +144,51 @@ static void megapreview_load_one_vmtr(const char *path, int *cap)
                      &x, &y, &w, &h, &flags, &ts, &chk, name,
                      (unsigned)sizeof name) != 8) continue;
         if (w <= 0 || h <= 0 || x < 0 || y < 0) continue;
-        if (g_rectCount == *cap) {
-            int grown = *cap ? *cap * 2 : 1024;
+        char *copy = _strdup(name);
+        if (!copy) break;
+        if (g_rectCount == g_rectCap) {
+            int grown = g_rectCap ? g_rectCap * 2 : 1024;
             vmtr_rect *bigger = (vmtr_rect *)realloc(g_rects, (size_t)grown * sizeof *bigger);
-            if (!bigger) break;
-            g_rects = bigger; *cap = grown;
+            if (!bigger) { free(copy); break; }
+            g_rects = bigger; g_rectCap = grown;
         }
         vmtr_rect *r = &g_rects[g_rectCount++];
-        strncpy_s(r->name, sizeof r->name, name, _TRUNCATE);
+        r->name = copy;
         r->x = (unsigned)x; r->y = (unsigned)y; r->w = (unsigned)w; r->h = (unsigned)h;
     }
     fclose(f);
+}
+
+/* Loading uses one allocation per row so the parser can grow without invalidating pointers. Once
+ * every table has been read, repack the names into one exact pool and shrink the rect array. This
+ * replaces the old fixed 192-byte name field on every row with only the bytes the names use. */
+static void megapreview_compact_rects(void)
+{
+    size_t need = 0;
+    for (int i = 0; i < g_rectCount; ++i) {
+        size_t n = strlen(g_rects[i].name) + 1u;
+        if (n > (size_t)-1 - need) return;
+        need += n;
+    }
+
+    char *pool = need ? (char *)malloc(need) : NULL;
+    if (need && pool) {
+        char *next = pool;
+        for (int i = 0; i < g_rectCount; ++i) {
+            size_t n = strlen(g_rects[i].name) + 1u;
+            memcpy(next, g_rects[i].name, n);
+            free((void *)g_rects[i].name);
+            g_rects[i].name = next;
+            next += n;
+        }
+        g_rectNames = pool;
+    }
+    g_rectNameBytes = need;
+
+    if (g_rectCount > 0) {
+        vmtr_rect *exact = (vmtr_rect *)realloc(g_rects, (size_t)g_rectCount * sizeof *exact);
+        if (exact) { g_rects = exact; g_rectCap = g_rectCount; }
+    }
 }
 
 static int megapreview_load_rects(void)
@@ -140,18 +203,22 @@ static int megapreview_load_rects(void)
         backend_log("B2: megapreview -- no .vmtr tables found; previews unavailable");
         return 0;
     }
-    int cap = 0;
     do {
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
         char path[MAX_PATH];
         _snprintf_s(path, sizeof path, _TRUNCATE, "%s\\%s", g_vtDir, fd.cFileName);
-        megapreview_load_one_vmtr(path, &cap);
+        megapreview_load_one_vmtr(path);
     } while (FindNextFileA(h, &fd));
     FindClose(h);
 
-    char line[160];
+    megapreview_compact_rects();
+
+    char line[260];
     _snprintf_s(line, sizeof line, _TRUNCATE,
-                "B2: megapreview -- loaded %d atlas rects from %s", g_rectCount, g_vtDir);
+                "B2: megapreview -- loaded %d atlas rects from %s; retained %llu name bytes and "
+                "%llu rect bytes",
+                g_rectCount, g_vtDir, (unsigned long long)g_rectNameBytes,
+                (unsigned long long)((size_t)g_rectCap * sizeof *g_rects));
     backend_log(line);
     return g_rectCount > 0;
 }
@@ -197,7 +264,7 @@ const char *sh_megapreview_name_at(int i)
     return out;
 }
 
-/* Open a shard and read its two tables. The layout follows idMegaTexture2::Load
+/* Open a shard and retain only its header metadata. The layout follows idMegaTexture2::Load
  * (FUN_140e10bf0) and was verified against every shipped shard:
  *
  *     0x000        0x170-byte header (magic 0xA63FBB21, version 2)
@@ -208,7 +275,7 @@ static shard_t *megapreview_shard(int n)
 {
     if (n < 1 || n > 16) return NULL;
     shard_t *s = &g_shard[n];
-    if (s->index) return s;
+    if (s->f) return s;
     if (s->tried)  return NULL;
     s->tried = 1;
 
@@ -235,19 +302,48 @@ static shard_t *megapreview_shard(int n)
         fclose(f); return NULL;
     }
 
-    unsigned           *index = (unsigned *)malloc((size_t)idxCount * 4);
-    unsigned long long *table = (unsigned long long *)malloc((size_t)pageCount * 16);
-    if (!index || !table) { free(index); free(table); fclose(f); return NULL; }
+    if (_fseeki64(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    long long fileEnd = _ftelli64(f);
+    if (fileEnd < 0) { fclose(f); return NULL; }
+    unsigned long long fileBytes = (unsigned long long)fileEnd;
+    if (idxOff > fileBytes || tableOff > fileBytes ||
+        (unsigned long long)idxCount > (fileBytes - idxOff) / 4u ||
+        (unsigned long long)pageCount > (fileBytes - tableOff) / 16u) {
+        fclose(f);
+        return NULL;
+    }
 
-    int ok = (_fseeki64(f, (long long)idxOff, SEEK_SET) == 0) &&
-             (fread(index, 4, idxCount, f) == idxCount) &&
-             (_fseeki64(f, (long long)tableOff, SEEK_SET) == 0) &&
-             (fread(table, 16, pageCount, f) == pageCount);
-    if (!ok) { free(index); free(table); fclose(f); return NULL; }
-
-    s->f = f; s->index = index; s->idxCount = idxCount;
-    s->table = table; s->pageCount = pageCount;
+    s->f = f; s->fileBytes = fileBytes;
+    s->indexOff = idxOff; s->idxCount = idxCount;
+    s->tableOff = tableOff; s->pageCount = pageCount;
     return s;
+}
+
+/* Resolve one cell by seeking to exactly one u32 page id and one 16-byte page-table entry. The
+ * previous implementation copied both complete shard tables into process memory on first touch;
+ * across all 16 installed shards that retained 67.9 MiB merely to read these 20 selected bytes. */
+static int megapreview_page_entry(shard_t *s, unsigned cell,
+                                  unsigned long long *out_off, unsigned long long *out_size)
+{
+    if (!s || !s->f || !out_off || !out_size || cell >= s->idxCount) return 0;
+
+    unsigned pid = 0;
+    unsigned long long indexAt = s->indexOff + (unsigned long long)cell * 4u;
+    if (_fseeki64(s->f, (long long)indexAt, SEEK_SET) != 0 ||
+        fread(&pid, sizeof pid, 1, s->f) != 1 ||
+        pid == 0xFFFFFFFFu || pid >= s->pageCount)
+        return 0;
+
+    unsigned long long entry[2] = {0, 0};
+    unsigned long long tableAt = s->tableOff + (unsigned long long)pid * 16u;
+    if (_fseeki64(s->f, (long long)tableAt, SEEK_SET) != 0 ||
+        fread(entry, sizeof entry, 1, s->f) != 1 ||
+        entry[0] > s->fileBytes || entry[1] > s->fileBytes - entry[0])
+        return 0;
+
+    *out_off = entry[0];
+    *out_size = entry[1];
+    return 1;
 }
 
 /* -------------------------------------------------------------------------- decoding ------------*/
@@ -264,12 +360,8 @@ static int megapreview_decode_page(int level, unsigned px, unsigned py)
     if (!s) return 0;
 
     unsigned cell = g_levelBase[level] + (py % axis) * axis + (px % axis);
-    if (cell >= s->idxCount) return 0;
-    unsigned pid = s->index[cell];
-    if (pid == 0xFFFFFFFFu || pid >= s->pageCount) return 0;
-
-    unsigned long long off  = s->table[(size_t)pid * 2];
-    unsigned long long size = s->table[(size_t)pid * 2 + 1];
+    unsigned long long off = 0, size = 0;
+    if (!megapreview_page_entry(s, cell, &off, &size)) return 0;
     if (size < 17 || size > PAGE_MAX) return 0;
 
     if (_fseeki64(s->f, (long long)off, SEEK_SET) != 0) return 0;
@@ -334,6 +426,7 @@ static int megapreview_page_core(int level, unsigned px, unsigned py, unsigned c
 
 static int megapreview_produce(const char *name, unsigned long generation)
 {
+    ULONGLONG started = GetTickCount64();
     const vmtr_rect *r = megapreview_find(name);
     if (!r) {
         char line[300];
@@ -407,10 +500,12 @@ static int megapreview_produce(const char *name, unsigned long generation)
 
     int published = sh_preview_publish(generation, crop, sw, sh);
 
-    char line[320];
+    char line[360];
     _snprintf_s(line, sizeof line, _TRUNCATE,
-                "B2: megapreview -- '%s' %ux%u px: mip L%d, %u page(s), %d decoded -> %ux%u preview",
-                name, r->w, r->h, level, nx * ny, got, sw, sh);
+                "B2: megapreview -- '%s' %ux%u px: mip L%d, %u page(s), %d decoded -> "
+                "%ux%u preview in %llu ms",
+                name, r->w, r->h, level, nx * ny, got, sw, sh,
+                (unsigned long long)(GetTickCount64() - started));
     backend_log(line);
 
     if (crop != canvas) free(crop);
@@ -421,39 +516,57 @@ static int megapreview_produce(const char *name, unsigned long generation)
 /* ---------------------------------------------------------------------------- worker ------------*/
 
 /* One serving thread, so decoding never runs on the UI or render thread and two requests can never
- * share the scratch buffers. Polling rather than an event because the transport is deliberately
- * ignorant of who produces for it; 100 ms is imperceptible next to the click that caused it. */
+ * share the scratch buffers. It sleeps on an event rather than waking ten times a second. Scratch
+ * is allocated only for an atlas-backed request and released after 30 seconds idle. */
+static int megapreview_service_request(const char *want, unsigned long generation, int kind)
+{
+    /* A catalog-typed Image is already the final resource. It must not load or search VMTR, and
+     * it must not be captured by a same-named Material record. */
+    if (kind == SH_ASSET_IMAGE)
+        return sh_imgpreview_produce_image(want, generation);
+
+    EnterCriticalSection(&g_lock);
+    int hasRect = megapreview_load_rects() && megapreview_find(want) != NULL;
+    int ok = hasRect && megapreview_alloc_scratch()
+           ? megapreview_produce(want, generation) : SH_PREVIEW_FAILED;
+    LeaveCriticalSection(&g_lock);
+
+    if (ok == SH_PREVIEW_STALE) return ok;
+
+    /* Atlas route declined -> the material is not virtual-textured. Roughly half the catalog
+     * is like that; those are backed by ordinary image assets, which imgpreview reads out of
+     * the .index/.resources containers. Outside the lock: different scratch, different files. */
+    if (!ok) ok = sh_imgpreview_produce(want, generation);
+    return ok;
+}
+
 static DWORD WINAPI megapreview_worker(LPVOID unused)
 {
     (void)unused;
     char want[512];
-    unsigned long failed_generation = 0;
 
     for (;;) {
-        Sleep(100);
+        DWORD wait = WaitForSingleObject(g_requestEvent, 30000);
+        if (wait == WAIT_TIMEOUT) {
+            EnterCriticalSection(&g_lock);
+            megapreview_free_scratch();
+            LeaveCriticalSection(&g_lock);
+            continue;
+        }
+        if (wait != WAIT_OBJECT_0) break;
+
         unsigned long generation = 0;
-        if (!sh_preview_take_request(want, sizeof want, &generation)) continue;
-
-        /* take_request keeps reporting the same request until something publishes, so a request that
-         * CANNOT be produced would otherwise be retried ten times a second forever. Suppress only
-         * that generation. A new click gets a new generation even when it repeats the same name. */
-        if (failed_generation == generation) continue;
-
-        EnterCriticalSection(&g_lock);
-        int ok = megapreview_load_rects() ? megapreview_produce(want, generation) : SH_PREVIEW_FAILED;
-        LeaveCriticalSection(&g_lock);
-
-        if (ok == SH_PREVIEW_STALE) continue;
-
-        /* Atlas route declined -> the material is not virtual-textured. Roughly half the catalog
-         * is like that; those are backed by ordinary image assets, which imgpreview reads out of
-         * the .index/.resources containers. Outside the lock: different scratch, different files. */
-        if (!ok) ok = sh_imgpreview_produce(want, generation);
-
-        if (ok == SH_PREVIEW_STALE) continue;
-        if (ok == SH_PREVIEW_PUBLISHED) failed_generation = 0;
-        else                            failed_generation = generation;
+        int kind = SH_PREVIEW_KIND_AUTO;
+        if (!sh_preview_take_request(want, sizeof want, &generation, &kind)) continue;
+        (void)megapreview_service_request(want, generation, kind);
+        /* A failed request stays unpublished; another click supplies another event. */
     }
+    return 0;
+}
+
+void sh_megapreview_wake(void)
+{
+    if (g_requestEvent) SetEvent(g_requestEvent);
 }
 
 int sh_megapreview_install(const sig_result *results, size_t n, const uint8_t *module_base)
@@ -482,22 +595,22 @@ int sh_megapreview_install(const sig_result *results, size_t n, const uint8_t *m
         axis /= 2;
     }
 
-    g_out  = (unsigned char *)malloc(OUT_SIZE);
-    g_page = (unsigned char *)malloc(PAGE_MAX + PAGE_SLACK);
-    if (!g_out || !g_page) { backend_log("B2: megapreview -- scratch alloc failed"); return 0; }
-    for (int L = 0; L < MAX_LEVELS; ++L) {
-        g_levelTmp[L] = (unsigned char *)malloc(PAGE_CORE * PAGE_CORE * 4);
-        if (!g_levelTmp[L]) { backend_log("B2: megapreview -- scratch alloc failed"); return 0; }
-    }
     InitializeCriticalSection(&g_lock);
+    g_requestEvent = CreateEventA(NULL, FALSE, FALSE, NULL);
+    if (!g_requestEvent) { backend_log("B2: megapreview -- request event failed"); return 0; }
 
     /* 8 MB reserved stack: the decoder's own frame is small but it recurses into the plane codec,
      * and reserve costs nothing until touched. */
     HANDLE t = CreateThread(NULL, 8u << 20, megapreview_worker, NULL, 0, NULL);
-    if (!t) { backend_log("B2: megapreview -- worker thread failed to start"); return 0; }
+    if (!t) {
+        CloseHandle(g_requestEvent); g_requestEvent = NULL;
+        backend_log("B2: megapreview -- worker thread failed to start");
+        return 0;
+    }
     SetThreadPriority(t, THREAD_PRIORITY_BELOW_NORMAL);
     CloseHandle(t);
 
-    backend_log("B2: megapreview -- installed; decoder verified at RVA 0x196E140, worker running");
+    backend_log("B2: megapreview -- installed; decoder verified at RVA 0x196E140, worker waiting; "
+                "decode scratch allocates on demand");
     return 1;
 }

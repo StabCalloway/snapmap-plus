@@ -32,7 +32,7 @@
 #include "entity.h"
 #include "typeinfo.h"
 #include "megapreview.h"  /* Assets-tab material preview: megatexture pages -> RGBA, CPU-only */
-#include "imgpreview.h"   /* ...and its fallback for materials with no megatexture rect */
+#include "imgpreview.h"   /* ...plus plain-material/direct-image previews and asset catalogs */
 #include "soundpreview.h" /* Assets-tab sound auditioning: the editor's own preview path */
 #include "patch.h"
 #include "algo.h"
@@ -378,9 +378,10 @@ static DWORD WINAPI bootstrap_thread(LPVOID p)
          * so an unrecognised build degrades to "no previews" rather than a call into the wrong
          * code. Hooks nothing. See megapreview.c for the format and decoder details. */
         sh_megapreview_install(results, db, g_doom_base);
-        /* imgpreview: the fallback half of the same feature -- materials with no megatexture rect,
-         * decoded from the shipped .index/.resources containers (BC1/BC3/BC7). Reads files only;
-         * no engine call, no hook. megapreview's worker calls it when the atlas route declines. */
+        /* imgpreview: plain materials and direct images decoded from the shipped
+         * .index/.resources containers (BC1/BC3/BC7), plus demand-loaded asset catalogs. Reads
+         * files only; no engine call, no hook. The preview worker calls it when the atlas route
+         * declines. */
         sh_imgpreview_install();
         /* soundpreview: the same browser's AUDIO half. Calls the editor's own audition path
          * (sound-world vtbl +0x30) and keeps the emitter handle it returns, so a preview can be

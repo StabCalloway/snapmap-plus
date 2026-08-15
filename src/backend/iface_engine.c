@@ -32,7 +32,7 @@
 #include "backend_log.h"
 #include "typeinfo.h"        /* sh_typeinfo_class_derives + the LIVE registry walks (collect_records/inherits) */
 #include "preview.h"         /* sh_preview_get / sh_preview_request -- the asset-preview transport */
-#include "imgpreview.h"      /* sh_imgpreview_list -- the Assets browser's material catalog */
+#include "imgpreview.h"      /* sh_imgpreview_list -- the Assets browser's installed-data catalogs */
 #include "megapreview.h"     /* sh_megapreview_rect -- the virtualmapping carrier's atlas rect */
 #include "soundpreview.h"    /* sh_soundpreview_play/stop -- auditioning a sound decl */
 #include "valid_class_map.h" /* SH_VCM_* -- the class-dropdown static snapshot (used only if the live walk fails) */
@@ -475,25 +475,32 @@ static int slot_find_material(sh_iface *self, const char *name, char *out_info, 
     return sh_typeinfo_find_material(name, out_info, (size_t)cap);
 }
 
-/* +0x2D0 (ext 13) Latest asset-preview image (preview.c). Pure passthrough; no engine state touched
- * here -- the pixels were produced and encoded elsewhere. Returns length, 0 if nothing published yet,
- * or -(required) if the UI's buffer is too small. */
+/* +0x2D0 (ext 13) Consume the latest asset-preview image (preview.c). Pure passthrough; no engine
+ * state touched here. Returns length, 0 if nothing is published, or -(required) if the UI's buffer
+ * is too small; the successful copy releases the backend's encoded buffer. */
 static int slot_get_preview(sh_iface *self, char *out, int cap)
 {
     (void)self;
     return sh_preview_get(out, (size_t)(cap > 0 ? cap : 0));
 }
 
-/* +0x2D8 (ext 14) Ask for a NAMED asset to be previewed. Staging only -- production happens on another
- * thread, so this returns as soon as the name is recorded and the caller polls get_preview (+0x2D0) for
- * the result. NOTE: no producer is installed yet (the megatexture page decoder is unwritten), so this
- * currently always times out on the UI side. The ABI slot is deliberately kept: it is route-independent
- * and appending it later would move no offsets but would need another matched-pair rollout. */
+/* +0x2D8 (ext 14) Ask for a NAMED asset to be previewed. Staging only -- production happens on the
+ * sleeping CPU worker, so this returns as soon as the name is recorded and the caller polls
+ * get_preview (+0x2D0). NULL/empty cancels the generation and releases any unconsumed image. */
 static int slot_request_preview(sh_iface *self, const char *name)
 {
     (void)self;
-    if (!name || !*name) return 0;
-    sh_preview_request(name);
+    if (!name || !*name) { sh_preview_cancel(); return 1; }
+    const char *asset = name;
+    int kind = SH_PREVIEW_KIND_AUTO;
+    const size_t image_prefix_len = sizeof(SH_PREVIEW_IMAGE_ROUTE_PREFIX) - 1;
+    if (strncmp(asset, SH_PREVIEW_IMAGE_ROUTE_PREFIX, image_prefix_len) == 0) {
+        asset += image_prefix_len;
+        kind = SH_ASSET_IMAGE;
+    }
+    if (!*asset) { sh_preview_cancel(); return 1; }
+    sh_preview_request_kind(asset, kind);
+    sh_megapreview_wake();
     return 1;
 }
 

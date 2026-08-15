@@ -1,5 +1,6 @@
 /* imgpreview.c -- see imgpreview.h. The SECOND preview producer: plain (non-megatexture)
- * materials, read out of the game's own `.index`/`.resources` containers and decoded on the CPU.
+ * materials and direct images, read out of the game's own `.index`/`.resources` containers and
+ * decoded on the CPU.
  *
  * megapreview.c covers the 5,033 materials that have a `.vmtr` atlas rect. The other ~4,772
  * render fine in game but are backed by ordinary image assets, so the atlas route cannot see
@@ -8,6 +9,9 @@
  *     name -> material record -> inflate decl -> `*map` field -> image record
  *          -> inflate .bimage -> first mip record -> BC1/BC3/BC7 -> RGBA
  *
+ * A direct image request starts at the image-record step. Catalog metadata is retained as compact
+ * strings and offsets; payload bytes stay in the installed game files until a preview is requested.
+ *
  * Everything is read-only against files the game ships. No engine call at all -- unlike the
  * megatexture codec, BCn and DEFLATE are public formats. */
 
@@ -15,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <share.h>
 
 #include "imgpreview.h"
 #include "preview.h"
@@ -222,7 +227,10 @@ typedef struct { unsigned char *idx; size_t idxLen; HANDLE res; } box_t;
  *
  * `soundbanksinfo.xml` is the Wwise-generated manifest id shipped with the game (26 MB, next to the
  * .bnk files). Parsed for `<Event Id="..." Name="..."/>` only; everything else is ignored. */
-static unsigned char *g_wwise;           /* the manifest text, kept alive: names point into it */
+static unsigned char *g_wwise;           /* compact strings; relevant tag stream only on pool OOM */
+static size_t         g_wwiseBytes;
+static size_t         g_wwiseSourceBytes;
+static size_t         g_wwiseTagBytes;
 static const char   **g_ev;              /* event names NOT already present as a decl */
 static int            g_evCount;
 
@@ -274,7 +282,11 @@ static int            g_sbCount;
 static box_t   g_box[2];                 /* 0 = snap_gameresources, 1 = gameresources */
 static rec_t  *g_rec;
 static int     g_recCount;
+static char   *g_namePool;               /* compact record names after raw indexes are parsed */
+static size_t  g_namePoolBytes;
 static int     g_loaded;
+static int     g_soundLoaded;            /* optional Wwise union attempted */
+static int     g_vmtrLoaded;             /* optional decl-less material union attempted */
 static char    g_baseDir[MAX_PATH];
 static CRITICAL_SECTION g_lock;
 
@@ -369,6 +381,15 @@ static int imgpreview_parse_box_index(int b, unsigned char *buf, size_t len)
         }
         if (kind < 0) continue;
 
+        /* The broader base-game box contributes only the three routes this browser can actually
+         * use: material and image records can satisfy cross-box pixel previews, and sound records
+         * are deliberately offered in the catalog. Its models, collision, FX, defs, particles,
+         * decals, perks, and SWFs are neither listed nor previewed, so retaining 28,230 records
+         * and their names for those types served no request. The SnapMap box remains complete. */
+        if (b == 1 && kind != SH_ASSET_MATERIAL && kind != SH_ASSET_IMAGE &&
+            kind != SH_ASSET_SOUND)
+            continue;
+
         if ((g_recCount & 1023) == 0) {
             rec_t *bigger = (rec_t *)realloc(g_rec, (size_t)(g_recCount + 1024) * sizeof *bigger);
             if (!bigger) {
@@ -425,6 +446,74 @@ static int imgpreview_load_box(int b, const char *stem)
     return 1;
 }
 
+static const rec_t *g_sortRec;
+
+/* Sort record indices by case-insensitive name, then original position. The position tie-break
+ * makes the earliest spelling the canonical string when the two boxes differ only in case. */
+static int __cdecl cmp_rec_name(const void *a, const void *b)
+{
+    int ia = *(const int *)a, ib = *(const int *)b;
+    int c = _stricmp(g_sortRec[ia].name, g_sortRec[ib].name);
+    return c ? c : ia - ib;
+}
+
+/* The parser initially points record names into the raw index buffers. Those buffers also contain
+ * every skipped type, payload path, and fixed record field, so retaining both complete files just
+ * to keep the recognized names alive wastes tens of megabytes. Copy one instance of each distinct
+ * recognized name into a compact pool, point duplicate records at that same immutable string, then
+ * release both raw indexes. Resource payloads remain on disk and are still addressed by each
+ * record's offset and sizes. Returns the number of raw bytes released. */
+static size_t imgpreview_compact_names(void)
+{
+    if (g_namePool) return 0;
+
+    int *ord = g_recCount ? (int *)malloc((size_t)g_recCount * sizeof *ord) : NULL;
+    if (ord) {
+        for (int i = 0; i < g_recCount; ++i) ord[i] = i;
+        g_sortRec = g_rec;
+        qsort(ord, (size_t)g_recCount, sizeof *ord, cmp_rec_name);
+    }
+
+    size_t need = 0;
+    for (int i = 0; i < g_recCount; ++i) {
+        int at = ord ? ord[i] : i;
+        if (ord && i > 0 && _stricmp(g_rec[at].name, g_rec[ord[i - 1]].name) == 0) continue;
+        size_t n = strlen(g_rec[at].name) + 1u;
+        if (n > (size_t)-1 - need) { free(ord); return 0; }
+        need += n;
+    }
+
+    char *pool = need ? (char *)malloc(need) : NULL;
+    if (need && !pool) { free(ord); return 0; }
+
+    char *dst = pool;
+    const char *shared = NULL;
+    for (int i = 0; i < g_recCount; ++i) {
+        int at = ord ? ord[i] : i;
+        int same = ord && i > 0 && _stricmp(g_rec[at].name, g_rec[ord[i - 1]].name) == 0;
+        if (!same) {
+            size_t n = strlen(g_rec[at].name) + 1u;
+            memcpy(dst, g_rec[at].name, n);
+            shared = dst;
+            dst += n;
+        }
+        g_rec[at].name = shared;
+    }
+    free(ord);
+
+    size_t released = 0;
+    for (int b = 0; b < (int)(sizeof g_box / sizeof g_box[0]); ++b) {
+        if (!g_box[b].idx) continue;
+        released += g_box[b].idxLen;
+        free(g_box[b].idx);
+        g_box[b].idx = NULL;
+        g_box[b].idxLen = 0;
+    }
+    g_namePool = pool;
+    g_namePoolBytes = need;
+    return released;
+}
+
 /* Sort/search helper: the two sources disagree on case, so every comparison here is case-folded. */
 static int __cdecl cmp_ci(const void *a, const void *b)
 {
@@ -435,7 +524,6 @@ static int __cdecl cmp_ci(const void *a, const void *b)
  * land next to each other. The index is the last key on purpose: it makes the order total, so the
  * pass that walks the result can rely on the earlier-indexed record always coming first and keep
  * that one. Reads through g_sortRec because qsort gives the comparator no context of its own. */
-static const rec_t *g_sortRec;
 static int __cdecl cmp_rec_kind_name(const void *a, const void *b)
 {
     int ia = *(const int *)a, ib = *(const int *)b;
@@ -453,13 +541,121 @@ static int __cdecl cmp_sb_name(const void *a, const void *b)
     return _stricmp(((const sndbank_t *)a)->name, ((const sndbank_t *)b)->name);
 }
 
-/* Parse a mutable, NUL-padded Wwise manifest into g_ev, keeping only events with no `sound` decl of
- * the same name. The catalog retains pointers into `buf` and therefore takes ownership of it. */
-static void imgpreview_parse_wwise_buffer(unsigned char *buf, size_t len)
+static int __cdecl cmp_sb_key(const void *a, const void *b)
+{
+    return _stricmp(*(const char * const *)a, ((const sndbank_t *)b)->name);
+}
+
+static int imgpreview_add_string_bytes(size_t *total, const char *value)
+{
+    size_t n = strlen(value) + 1u;
+    if (n > (size_t)-1 - *total) return 0;
+    *total += n;
+    return 1;
+}
+
+static char *imgpreview_copy_string(char **next, const char *value)
+{
+    size_t n = strlen(value) + 1u;
+    char *copy = *next;
+    memcpy(copy, value, n);
+    *next += n;
+    return copy;
+}
+
+static void *imgpreview_shrink_array(void *items, size_t count, size_t itemBytes)
+{
+    if (!items) return NULL;
+    if (!count) { free(items); return NULL; }
+    if (itemBytes > (size_t)-1 / count) return items;
+    void *exact = realloc(items, count * itemBytes);
+    return exact ? exact : items;
+}
+
+static void imgpreview_shrink_wwise_tables(void)
+{
+    g_ev = (const char **)imgpreview_shrink_array(g_ev, (size_t)g_evCount, sizeof *g_ev);
+    g_sb = (sndbank_t *)imgpreview_shrink_array(g_sb, (size_t)g_sbCount, sizeof *g_sb);
+}
+
+/* Parsing needs a mutable tag stream, but steady-state catalog use needs only each distinct event
+ * name and each distinct bank name once. g_sb already has one row per event and g_ev is a subset of
+ * those same events, so both tables can point into one interned pool instead of duplicating event
+ * strings or repeating one bank name hundreds of times. */
+static size_t imgpreview_compact_wwise_strings(void)
+{
+    const char **banks = g_sbCount ? (const char **)malloc((size_t)g_sbCount * sizeof *banks) : NULL;
+    int *sbBank = g_sbCount ? (int *)malloc((size_t)g_sbCount * sizeof *sbBank) : NULL;
+    int *evRow = g_evCount ? (int *)malloc((size_t)g_evCount * sizeof *evRow) : NULL;
+    if ((g_sbCount && (!banks || !sbBank)) || (g_evCount && !evRow)) {
+        free(banks); free(sbBank); free(evRow);
+        return g_wwiseBytes;
+    }
+
+    for (int i = 0; i < g_sbCount; ++i) banks[i] = g_sb[i].bank;
+    qsort(banks, (size_t)g_sbCount, sizeof *banks, cmp_ci);
+    int bankCount = 0;
+    for (int i = 0; i < g_sbCount; ++i)
+        if (i == 0 || _stricmp(banks[i], banks[i - 1]) != 0) banks[bankCount++] = banks[i];
+
+    for (int i = 0; i < g_sbCount; ++i) {
+        const char *key = g_sb[i].bank;
+        const char **found = (const char **)bsearch(&key, banks, (size_t)bankCount,
+                                                    sizeof *banks, cmp_ci);
+        if (!found) { free(banks); free(sbBank); free(evRow); return g_wwiseBytes; }
+        sbBank[i] = (int)(found - banks);
+    }
+    for (int i = 0; i < g_evCount; ++i) {
+        const char *key = g_ev[i];
+        sndbank_t *found = (sndbank_t *)bsearch(&key, g_sb, (size_t)g_sbCount,
+                                                sizeof *g_sb, cmp_sb_key);
+        if (!found) { free(banks); free(sbBank); free(evRow); return g_wwiseBytes; }
+        evRow[i] = (int)(found - g_sb);
+    }
+
+    size_t need = 0;
+    for (int i = 0; i < g_sbCount; ++i)
+        if (!imgpreview_add_string_bytes(&need, g_sb[i].name)) {
+            free(banks); free(sbBank); free(evRow); return g_wwiseBytes;
+        }
+    for (int i = 0; i < bankCount; ++i)
+        if (!imgpreview_add_string_bytes(&need, banks[i])) {
+            free(banks); free(sbBank); free(evRow); return g_wwiseBytes;
+        }
+
+    unsigned char *pool = need ? (unsigned char *)malloc(need) : NULL;
+    if (need && !pool) {
+        free(banks); free(sbBank); free(evRow); return g_wwiseBytes;
+    }
+
+    char *next = (char *)pool;
+    for (int i = 0; i < g_sbCount; ++i)
+        g_sb[i].name = imgpreview_copy_string(&next, g_sb[i].name);
+    for (int i = 0; i < bankCount; ++i)
+        banks[i] = imgpreview_copy_string(&next, banks[i]);
+    for (int i = 0; i < g_sbCount; ++i) g_sb[i].bank = banks[sbBank[i]];
+    for (int i = 0; i < g_evCount; ++i) g_ev[i] = g_sb[evRow[i]].name;
+
+    free(g_wwise);
+    g_wwise = pool;
+    g_wwiseBytes = need;
+    free(banks); free(sbBank); free(evRow);
+    return need;
+}
+
+/* Parse a mutable, NUL-padded stream of only the relevant Wwise tags into g_ev, keeping only events
+ * with no `sound` decl of the same name. Takes ownership of `buf`; normal completion compacts every
+ * retained pointer into a small owned string pool before releasing the transient tag stream.
+ * `sourceBytes` is the full manifest size for the production measurement; tests pass their buffer
+ * size directly. */
+static void imgpreview_parse_wwise_buffer_sized(unsigned char *buf, size_t len, size_t sourceBytes)
 {
     if (!buf) return;
     buf[len] = '\0';
     g_wwise = buf;
+    g_wwiseBytes = len + 1u;
+    g_wwiseSourceBytes = sourceBytes;
+    g_wwiseTagBytes = len + 1u;
 
     /* The decl names, sorted case-insensitively, so the dedup is a binary search rather than a
      * 7,649 x 5,658 scan. */
@@ -473,7 +669,13 @@ static void imgpreview_parse_wwise_buffer(unsigned char *buf, size_t len)
 
     int cap = 1024, dup = 0;
     g_ev = (const char **)malloc((size_t)cap * sizeof *g_ev);
-    if (!g_ev) { free(decl); return; }
+    if (!g_ev) {
+        free(decl);
+        free(g_wwise);
+        g_wwise = NULL;
+        g_wwiseBytes = 0;
+        return;
+    }
 
     /* Every (event, bank) pair, before dedup. The manifest repeats an event once per bank that
      * includes it -- 39,971 elements for 7,649 names -- so this is the raw pair list that the
@@ -564,46 +766,120 @@ static void imgpreview_parse_wwise_buffer(unsigned char *buf, size_t len)
         free(sbRaw);
     }
 
-    char line[300];
+    size_t retainedBytes = imgpreview_compact_wwise_strings();
+    imgpreview_shrink_wwise_tables();
+    char line[500];
     _snprintf_s(line, sizeof line, _TRUNCATE,
         "B2: imgpreview -- Wwise manifest: %d distinct event(s) with no decl added to the sound "
-        "catalog (%d bank-repeats collapsed, %d already had a decl); %d event(s) mapped to a bank",
-        g_evCount, raw - g_evCount, dup, g_sbCount);
+        "catalog (%d bank-repeats collapsed, %d already had a decl); %d event(s) mapped to a bank; "
+        "%llu source bytes streamed through %llu relevant tag bytes to %llu retained string bytes",
+        g_evCount, raw - g_evCount, dup, g_sbCount,
+        (unsigned long long)sourceBytes, (unsigned long long)(len + 1u),
+        (unsigned long long)retainedBytes);
     backend_log(line);
 }
 
-/* Read and parse the Wwise manifest. Failure is non-fatal: an unavailable or unreasonably large
- * manifest simply leaves the catalog as it was. */
-static void imgpreview_load_wwise(void)
+static void imgpreview_parse_wwise_buffer(unsigned char *buf, size_t len)
+{
+    imgpreview_parse_wwise_buffer_sized(buf, len, len + 1u);
+}
+
+#define WWISE_RELEVANT_MAX (16u * 1024u * 1024u)
+
+static int imgpreview_append_wwise(unsigned char **buf, size_t *len, size_t *cap,
+                                   const char *value, size_t valueLen)
+{
+    if (!buf || !len || !cap || !value || valueLen > WWISE_RELEVANT_MAX - *len) return 0;
+    size_t need = *len + valueLen + 1u;
+    if (need > *cap) {
+        size_t grown = *cap ? *cap : 65536u;
+        while (grown < need) {
+            if (grown > WWISE_RELEVANT_MAX / 2u) { grown = WWISE_RELEVANT_MAX; break; }
+            grown *= 2u;
+        }
+        if (grown < need) return 0;
+        unsigned char *bigger = (unsigned char *)realloc(*buf, grown);
+        if (!bigger) return 0;
+        *buf = bigger;
+        *cap = grown;
+    }
+    memcpy(*buf + *len, value, valueLen);
+    *len += valueLen;
+    (*buf)[*len] = '\0';
+    return 1;
+}
+
+static int imgpreview_append_wwise_tag(unsigned char **buf, size_t *len, size_t *cap,
+                                       const char *prefix, const char *value, size_t valueLen,
+                                       const char *suffix)
+{
+    return imgpreview_append_wwise(buf, len, cap, prefix, strlen(prefix)) &&
+           imgpreview_append_wwise(buf, len, cap, value, valueLen) &&
+           imgpreview_append_wwise(buf, len, cap, suffix, strlen(suffix));
+}
+
+/* Stream the Wwise manifest line by line and retain only bank names and Event names in a compact
+ * transient tag stream. The installed document is about 26 MiB, while these relevant tags are only
+ * a small fraction of it; duration, attenuation, streamed-file, media, and hash metadata never
+ * enters the process. Failure is non-fatal and leaves the decl-only sound catalog available. */
+static void imgpreview_load_wwise_file(void)
 {
     char p[MAX_PATH];
     _snprintf_s(p, sizeof p, _TRUNCATE, "%s\\sound\\soundbanks\\pc\\soundbanksinfo.xml", g_baseDir);
-    HANDLE f = CreateFileA(p, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-    if (f == INVALID_HANDLE_VALUE) {
+    FILE *f = _fsopen(p, "rb", _SH_DENYNO);
+    if (!f) {
         backend_log("B2: imgpreview -- no soundbanksinfo.xml; Wwise events unavailable");
         return;
     }
-    LARGE_INTEGER sz;
-    if (!GetFileSizeEx(f, &sz) || sz.QuadPart < 0 ||
-        (unsigned long long)sz.QuadPart > 0xFFFFFFFFull ||
-        (unsigned long long)sz.QuadPart > (size_t)-1 - 1u) {
-        CloseHandle(f);
+    if (_fseeki64(f, 0, SEEK_END) != 0) { fclose(f); return; }
+    long long fileEnd = _ftelli64(f);
+    if (fileEnd < 0 || (unsigned long long)fileEnd > (size_t)-1) {
+        fclose(f);
         backend_log("B2: imgpreview -- soundbanksinfo.xml is too large to read safely");
         return;
     }
-    size_t len = (size_t)sz.QuadPart;
-    unsigned char *buf = (unsigned char *)malloc(len + 1u);
-    DWORD got = 0;
-    if (!buf || !ReadFile(f, buf, (DWORD)len, &got, NULL) || got != (DWORD)len) {
-        CloseHandle(f); free(buf); return;
+    size_t sourceBytes = (size_t)fileEnd;
+    if (_fseeki64(f, 0, SEEK_SET) != 0) { fclose(f); return; }
+
+    unsigned char *buf = NULL;
+    size_t len = 0, cap = 0;
+    char line[4096], bank[256] = {0};
+    int inBank = 0, ok = 1;
+    while (ok && fgets(line, sizeof line, f)) {
+        if (strstr(line, "<SoundBank ")) { inBank = 1; bank[0] = '\0'; }
+        if (inBank && !bank[0]) {
+            char *start = strstr(line, "<ShortName>");
+            char *end = start ? strstr(start + 11, "</ShortName>") : NULL;
+            if (start && end && (size_t)(end - (start + 11)) < sizeof bank) {
+                size_t n = (size_t)(end - (start + 11));
+                memcpy(bank, start + 11, n); bank[n] = '\0';
+                ok = imgpreview_append_wwise_tag(&buf, &len, &cap,
+                    "<SoundBank ><ShortName>", bank, n, "</ShortName>");
+            }
+        }
+        if (inBank && bank[0]) {
+            char *event = strstr(line, "<Event ");
+            char *name = event ? strstr(event, "Name=\"") : NULL;
+            char *end = name ? strchr(name + 6, '\"') : NULL;
+            if (name && end)
+                ok = imgpreview_append_wwise_tag(&buf, &len, &cap,
+                    "<Event Name=\"", name + 6, (size_t)(end - (name + 6)), "\">");
+        }
+        if (strstr(line, "</SoundBank>")) { inBank = 0; bank[0] = '\0'; }
     }
-    CloseHandle(f);
-    imgpreview_parse_wwise_buffer(buf, len);
+    if (ferror(f)) ok = 0;
+    fclose(f);
+    if (!ok || !buf) {
+        free(buf);
+        backend_log("B2: imgpreview -- Wwise relevant-tag stream could not be built");
+        return;
+    }
+    imgpreview_parse_wwise_buffer_sized(buf, len, sourceBytes);
 }
 
 /* Hide a sound decl that is nothing but a wrapper around a Wwise event already in the catalog.
  *
- * The exact-name dedup in imgpreview_load_wwise catches the 5,160 decls literally NAMED `play_*`,
+ * The manifest's exact-name dedup catches the 5,160 decls literally NAMED `play_*`,
  * because those equal their event's name outright. It cannot catch the other 449, which are
  * PATH-FORM -- and those were showing up as a second row for a sound already listed:
  *
@@ -673,12 +949,34 @@ static int imgpreview_hide_wrapped_sounds(void)
     return hid;
 }
 
+/* Sound-only augmentation is deliberately separate from the base resource index. Opening Images,
+ * Models, or any other unrelated category must not read or retain Wwise metadata. */
+static void imgpreview_load_sound_catalog(void)
+{
+    if (g_soundLoaded) return;
+    g_soundLoaded = 1;
+    ULONGLONG started = GetTickCount64();
+    imgpreview_load_wwise_file();
+
+    int wrapped = imgpreview_hide_wrapped_sounds();
+    char line[220];
+    _snprintf_s(line, sizeof line, _TRUNCATE,
+        "B2: imgpreview -- sound catalog ready in %llu ms; "
+        "%d wrapper sound decl(s) hidden behind a Play_ event",
+        (unsigned long long)(GetTickCount64() - started), wrapped);
+    backend_log(line);
+}
+
 /* Fold the `.vmtr` atlas rows that have NO material decl into the material catalog. Same shape as
- * imgpreview_load_wwise: sort the decl names once, then binary-search each atlas row against them.
+ * the sound union: sort the decl names once, then binary-search each atlas row against them.
  * Names point into megapreview's parsed table, which lives for the process, so nothing is copied.
  * Failure is non-fatal -- a missing atlas just leaves the catalog decl-only, as it was before. */
 static void imgpreview_load_vmtr(void)
 {
+    if (g_vmtrLoaded) return;
+    g_vmtrLoaded = 1;
+    ULONGLONG started = GetTickCount64();
+
     const char **decl = (const char **)malloc((size_t)g_recCount * sizeof *decl);
     int dn = 0;
     if (decl) {
@@ -714,12 +1012,14 @@ static void imgpreview_load_vmtr(void)
             if (_stricmp(g_vt[i], g_vt[w - 1]) != 0) g_vt[w++] = g_vt[i];
         g_vtCount = w;
     }
+    g_vt = (const char **)imgpreview_shrink_array(g_vt, (size_t)g_vtCount, sizeof *g_vt);
 
-    char line[240];
+    char line[280];
     _snprintf_s(line, sizeof line, _TRUNCATE,
         "B2: imgpreview -- .vmtr atlas: %d distinct decl-less material(s) added to the material "
-        "catalog (%d shard-repeats collapsed, %d already had a decl)",
-        g_vtCount, raw - g_vtCount, dup);
+        "catalog (%d shard-repeats collapsed, %d already had a decl) in %llu ms",
+        g_vtCount, raw - g_vtCount, dup,
+        (unsigned long long)(GetTickCount64() - started));
     backend_log(line);
 }
 
@@ -727,6 +1027,7 @@ static int imgpreview_load(void)
 {
     if (g_loaded) return g_loaded > 0;
     g_loaded = -1;
+    ULONGLONG started = GetTickCount64();
     char exe[MAX_PATH] = {0};
     if (!GetModuleFileNameA(NULL, exe, MAX_PATH)) return 0;
     char *slash = strrchr(exe, '\\'); if (!slash) return 0;
@@ -735,6 +1036,11 @@ static int imgpreview_load(void)
 
     int a = imgpreview_load_box(0, "snap_gameresources");
     int b = imgpreview_load_box(1, "gameresources");
+    size_t indexBytes = g_box[0].idxLen + g_box[1].idxLen;
+    size_t releasedIndexBytes = imgpreview_compact_names();
+    size_t retainedIndexBytes =
+        (releasedIndexBytes == indexBytes) ? g_namePoolBytes : indexBytes;
+    const char *indexMode = (releasedIndexBytes == indexBytes) ? "compacted" : "raw retained";
 
     /* Promote the 232 SnapMap MODULES out of the brush-model pile. They are the only .bmodel
      * records that pair 1:1 with a collision model, so they are the only ones that can be placed
@@ -815,8 +1121,6 @@ static int imgpreview_load(void)
         }
     }
 
-    imgpreview_load_wwise();
-
     /* Decide, once, which records the browser will LIST.
      *
      * Box 0 (`snap_gameresources`) is everything SnapMap ships with. Box 1 (`gameresources`) is
@@ -827,36 +1131,60 @@ static int imgpreview_load(void)
      *
      * Duplicates are dropped rather than shown twice: 2,401 sound names appear in both boxes. The
      * box-0 record wins, so nothing that already worked changes route. */
+    const char **snapSounds = (const char **)malloc((size_t)g_recCount * sizeof *snapSounds);
+    int snapSoundCount = 0;
+    if (snapSounds) {
+        for (int i = 0; i < g_recCount; ++i)
+            if (g_rec[i].box == 0 && g_rec[i].kind == SH_ASSET_SOUND && !g_rec[i].hidden)
+                snapSounds[snapSoundCount++] = g_rec[i].name;
+        qsort(snapSounds, (size_t)snapSoundCount, sizeof *snapSounds, cmp_ci);
+    }
+
     int dup = 0, extra = 0;
     for (int i = 0; i < g_recCount; ++i) {
         if (g_rec[i].box == 0) continue;
         if (g_rec[i].kind != SH_ASSET_SOUND) { g_rec[i].hidden = 1; continue; }
-        for (int j = 0; j < g_recCount; ++j) {
-            if (g_rec[j].box != 0 || g_rec[j].kind != SH_ASSET_SOUND) continue;
-            if (_stricmp(g_rec[j].name, g_rec[i].name) == 0) { g_rec[i].hidden = 1; dup++; break; }
+        if (g_rec[i].hidden) continue;
+
+        const char *key = g_rec[i].name;
+        int twin = snapSounds &&
+            bsearch(&key, snapSounds, (size_t)snapSoundCount, sizeof *snapSounds, cmp_ci) != NULL;
+        if (!snapSounds) {
+            for (int j = 0; j < g_recCount && !twin; ++j)
+                if (g_rec[j].box == 0 && g_rec[j].kind == SH_ASSET_SOUND &&
+                    !g_rec[j].hidden && _stricmp(g_rec[j].name, key) == 0)
+                    twin = 1;
         }
-        if (!g_rec[i].hidden) extra++;
+        if (twin) { g_rec[i].hidden = 1; dup++; }
+        else extra++;
     }
+    free(snapSounds);
 
-    /* AFTER the box dedup, so a box-1 sound already hidden as a box-0 duplicate is not counted
-     * twice, and the tally reports only rows this pass is actually responsible for removing. */
-    int wrapped = imgpreview_hide_wrapped_sounds();
+    g_rec = (rec_t *)imgpreview_shrink_array(g_rec, (size_t)g_recCount, sizeof *g_rec);
 
-    /* AFTER the hide pass: it dedupes against the decls the browser will actually list, so a
-     * base-game-only material that got hidden above must not suppress its atlas twin. */
-    imgpreview_load_vmtr();
-
-    char line[480];
+    char line[600];
     _snprintf_s(line, sizeof line, _TRUNCATE,
         "B2: imgpreview -- indexed %d records (snap=%s game=%s); %d SnapMap modules; "
         "%d light material(s) also listed under Lights; "
         "%d record(s) collapsed as a repeat of a name in the same box; "
+        "index metadata %llu raw bytes -> %llu retained bytes (%s); "
         "base-game sounds offered: %d (%d duplicates of SnapMap sounds dropped); "
-        "%d wrapper sound decl(s) hidden behind their Play_ event",
-        g_recCount, a ? "ok" : "MISSING", b ? "ok" : "missing", modules, lights, boxdup, extra, dup, wrapped);
+        "optional sound and .vmtr catalogs remain unloaded; base catalog ready in %llu ms",
+        g_recCount, a ? "ok" : "MISSING", b ? "ok" : "missing", modules, lights, boxdup,
+        (unsigned long long)indexBytes, (unsigned long long)retainedIndexBytes, indexMode,
+        extra, dup, (unsigned long long)(GetTickCount64() - started));
     backend_log(line);
     g_loaded = (g_recCount > 0) ? 1 : -1;
     return g_loaded > 0;
+}
+
+static void imgpreview_prepare_list_kind(int kind)
+{
+    if (kind == SH_ASSET_SOUND || kind == SH_ASSET_SNDBANK) {
+        imgpreview_load_sound_catalog();
+    } else if (kind == SH_ASSET_MATERIAL || kind == SH_ASSET_VTONLY) {
+        imgpreview_load_vmtr();
+    }
 }
 
 static const rec_t *find_rec(const char *name, int kind)
@@ -869,16 +1197,19 @@ static const rec_t *find_rec(const char *name, int kind)
 /* Is `name` a real decl of this type in the shipped containers? Exposed for callers that are about
  * to hand a name to an ENGINE lookup and need to know it exists first -- the engine's find-or-create
  * primitive fatals on a miss, so "does this name exist" has to be answered from our own data, never
- * by trying it. Takes the same lock as the list path; the catalog is parsed lazily on first use. */
+ * by trying it. Takes the same lock as the list path; the base catalog is parsed lazily, and Wwise
+ * metadata is added only for a sound lookup. */
 int sh_imgpreview_has(int kind, const char *name)
 {
     if (!name || !name[0]) return 0;
     EnterCriticalSection(&g_lock);
     int ok = 0;
     if (imgpreview_load()) {
+        if (kind == SH_ASSET_SOUND) imgpreview_load_sound_catalog();
         ok = find_rec(name, kind) != NULL;
-        /* A Wwise event with no decl is still a real, playable name -- 2,591 of them, including
-         * the generic SnapMap VO. The engine resolves it through find-or-CREATE, which builds the
+        /* A Wwise event with no decl is still a real, playable name -- up to 2,591 relative to the
+         * SnapMap-only decl set, including generic VO (the broader sound union claims more exact
+         * matches). The engine resolves it through find-or-CREATE, which builds the
          * decl on demand; that path is safe by default (its only fatal is gated on
          * `resource_errorInGame == 2`, and the cvar ships at 0 = "Nothing"). */
         if (!ok && kind == SH_ASSET_SOUND) {
@@ -894,11 +1225,11 @@ int sh_imgpreview_has(int kind, const char *name)
  * miss falls back to the first record whose base name matches. */
 static const rec_t *find_image(const char *name)
 {
-    const rec_t *r = find_rec(name, 1);
+    const rec_t *r = find_rec(name, SH_ASSET_IMAGE);
     if (r) return r;
     size_t n = strlen(name);
     for (int i = 0; i < g_recCount; ++i) {
-        if (g_rec[i].kind != 1) continue;
+        if (g_rec[i].kind != SH_ASSET_IMAGE) continue;
         const char *nm = g_rec[i].name;
         if (_strnicmp(nm, name, n) == 0 && nm[n] == '$') return &g_rec[i];
     }
@@ -987,31 +1318,42 @@ static void downscale(const unsigned char *src, unsigned sw, unsigned sh, unsign
     }
 }
 
-int sh_imgpreview_produce(const char *name, unsigned long generation)
+static int imgpreview_produce_kind(const char *name, unsigned long generation, int direct_image)
 {
+    ULONGLONG started = GetTickCount64();
     EnterCriticalSection(&g_lock);
     int ok = 0;
     unsigned char *decl = NULL, *bim = NULL, *rgba = NULL, *thumb = NULL;
     __try {
         if (!imgpreview_load()) __leave;
 
-        const rec_t *mr = find_rec(name, 0);
-        if (!mr) { backend_log("B2: imgpreview -- no material record"); __leave; }
-
-        size_t dlen = 0; decl = read_payload(mr, &dlen);
-        if (!decl || !dlen) { backend_log("B2: imgpreview -- decl read failed"); __leave; }
-
         char img[256];
-        if (!decl_find_image((const char *)decl, dlen, img, sizeof img)) {
-            char l[320]; _snprintf_s(l,sizeof l,_TRUNCATE,
-                "B2: imgpreview -- '%s' decl names no usable image (atlased decal/particle?)", name);
-            backend_log(l); __leave;
-        }
-        const rec_t *ir = find_image(img);
-        if (!ir) {
-            char l[400]; _snprintf_s(l,sizeof l,_TRUNCATE,
-                "B2: imgpreview -- '%s' -> image '%s' not in any container", name, img);
-            backend_log(l); __leave;
+        const char *image_name = NULL;
+        const rec_t *ir = NULL;
+        const rec_t *mr = direct_image ? NULL : find_rec(name, SH_ASSET_MATERIAL);
+        if (mr) {
+            size_t dlen = 0; decl = read_payload(mr, &dlen);
+            if (!decl || !dlen) { backend_log("B2: imgpreview -- decl read failed"); __leave; }
+            if (!decl_find_image((const char *)decl, dlen, img, sizeof img)) {
+                char l[320]; _snprintf_s(l,sizeof l,_TRUNCATE,
+                    "B2: imgpreview -- '%s' decl names no usable image (atlased decal/particle?)", name);
+                backend_log(l); __leave;
+            }
+            ir = find_image(img);
+            image_name = img;
+            if (!ir) {
+                char l[400]; _snprintf_s(l,sizeof l,_TRUNCATE,
+                    "B2: imgpreview -- '%s' -> image '%s' not in any container", name, img);
+                backend_log(l); __leave;
+            }
+        } else {
+            ir = find_image(name);
+            if (!ir) {
+                backend_log(direct_image ? "B2: imgpreview -- no direct image record"
+                                         : "B2: imgpreview -- no material or image record");
+                __leave;
+            }
+            image_name = ir->name;
         }
 
         size_t blen = 0; bim = read_payload(ir, &blen);
@@ -1049,16 +1391,27 @@ int sh_imgpreview_produce(const char *name, unsigned long generation)
 
         ok = sh_preview_publish(generation, thumb, dw, dh);
         if (ok != SH_PREVIEW_PUBLISHED) __leave;
-        char l[360];
+        char l[400];
         _snprintf_s(l, sizeof l, _TRUNCATE,
-            "B2: imgpreview -- '%s' -> image '%s' %ux%u fmt=%u -> %ux%u preview",
-            name, img, w, h, fmt, dw, dh);
+            "B2: imgpreview -- '%s' -> image '%s' %ux%u fmt=%u -> %ux%u preview in %llu ms",
+            name, image_name, w, h, fmt, dw, dh,
+            (unsigned long long)(GetTickCount64() - started));
         backend_log(l);
     } __finally {
         free(decl); free(bim); free(rgba); free(thumb);
         LeaveCriticalSection(&g_lock);
     }
     return ok;
+}
+
+int sh_imgpreview_produce(const char *name, unsigned long generation)
+{
+    return imgpreview_produce_kind(name, generation, 0);
+}
+
+int sh_imgpreview_produce_image(const char *name, unsigned long generation)
+{
+    return imgpreview_produce_kind(name, generation, 1);
 }
 
 int sh_imgpreview_list(int kind, unsigned start, char *out, size_t cap)
@@ -1071,6 +1424,7 @@ int sh_imgpreview_list(int kind, unsigned start, char *out, size_t cap)
     EnterCriticalSection(&g_lock);
     int written = 0;
     if (imgpreview_load()) {
+        imgpreview_prepare_list_kind(kind);
         size_t used = 0;
         unsigned seen = 0;
         for (int i = 0; i < g_recCount; ++i) {

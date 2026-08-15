@@ -240,15 +240,22 @@ typedef int           (*sh_manipulation_in_progress_fn)(struct sh_iface *self); 
  * genuinely made-up name still correctly reports "not found". Writes a short human-readable result into
  * out_info ("found (WxH)" / "found" / empty), returns 1 on a hit, 0 otherwise (miss / bad name / engine
  * down). */
-/* +0x2D0 (ext 13) Fetch the latest rendered asset preview as a `data:image/bmp;base64,...` URI.
- * Returns length, 0 if nothing captured yet, or -(required size) when `cap` is too small. */
+/* +0x2D0 (ext 13) Consume the latest asset preview as a `data:image/png;base64,...` URI. Returns
+ * length, 0 if nothing is published, or -(required size) when `cap` is too small. A successful copy
+ * releases the backend buffer; an undersized probe leaves it available for the required retry. */
 typedef int           (*sh_get_preview_fn)(struct sh_iface *self, char *out, int cap);
+
+/* The append-stable request_preview slot predates direct Image previews and carries only a string.
+ * The matched frontend prefixes Image selections with this non-path control marker so the backend can
+ * distinguish a direct Image from a same-named Material without adding or moving a vtable slot. Asset
+ * catalog names cannot contain the marker. Other callers continue to pass an ordinary asset name. */
+#define SH_PREVIEW_IMAGE_ROUTE_PREFIX "\x1Fimage:"
 
 /* +0x2D8 (ext 14) Request that `name` be previewed. ASYNCHRONOUS: it stages the name and invalidates the
  * current image; pixels are produced on another thread and take some time to arrive. Poll get_preview
- * (+0x2D0) until it returns > 0. Returns 1 if the request was staged, 0 if it was rejected (null/empty
- * name, or the engine side is not installed). Staging always succeeds even when no image producer is
- * installed -- in that case the poll simply times out. */
+ * (+0x2D0) until it returns > 0. NULL/empty cancels any staged generation and unconsumed image.
+ * SH_PREVIEW_IMAGE_ROUTE_PREFIX selects a direct Image; an unprefixed name keeps the legacy
+ * Material-first behavior. Returns 1 if the request or cancellation was accepted. */
 typedef int           (*sh_request_preview_fn)(struct sh_iface *self, const char *name);
 
 typedef int           (*sh_find_material_fn)(struct sh_iface *self, const char *name,
@@ -554,8 +561,8 @@ typedef struct sh_iface_vtbl {
                                                       * -> every selection mutation is refused; see typedef */
     sh_find_material_fn        find_material;        /* +0x2C8 (ext 12) FIND a material decl by name
                                                       * (cached-only; the Revenant asset-viewport tab probe) */
-    sh_get_preview_fn          get_preview;          /* +0x2D0 (ext 13) latest engine-rendered asset
-                                                      * preview as a data:image/bmp;base64 URI */
+    sh_get_preview_fn          get_preview;          /* +0x2D0 (ext 13) consume latest asset preview
+                                                      * as a data:image/png;base64 URI */
     sh_request_preview_fn      request_preview;      /* +0x2D8 (ext 14) ask for a NAMED asset to be
                                                       * produced into that preview */
     sh_list_materials_fn       list_materials;       /* +0x2E0 (ext 15) page the material catalog

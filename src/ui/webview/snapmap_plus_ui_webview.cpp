@@ -1347,11 +1347,11 @@ static void poc_send_material_result(const char *name)
     json += L",\"info\":\""; json += poc_json_w(info); json += L"\"}";
     g_webview->PostWebMessageAsJson(json.c_str());
 }
-/* Asset-viewport tab: fetch the latest published preview (+0x2D0 get_preview -- see preview.c). The
- * backend encodes the pixels as a BMP data URI, so this is a pure fetch: no rendering, no engine touch.
+/* Asset browser: consume the latest published preview (+0x2D0 get_preview -- see preview.c). The
+ * backend encodes pixels as a PNG data URI, so this is a pure fetch: no rendering or engine touch.
  * Two-step size probe because the image can be a few hundred KB and the required size is only known
  * once something has actually been published. */
-static void poc_send_preview()
+static void poc_send_preview(const char *name)
 {
     if (!g_webview) return;
     std::string uri;
@@ -1372,19 +1372,29 @@ static void poc_send_preview()
     json += uri.empty() ? L"false" : L"true";
     json += L",\"uri\":\"";
     json += poc_json_w(uri.c_str());
+    json += L"\",\"name\":\"";
+    json += poc_json_w(name ? name : "");
     json += L"\"}";
     g_webview->PostWebMessageAsJson(json.c_str());
 }
 
-/* Asset-viewport tab: ask the backend to render a NAMED material (+0x2D8 request_preview). Staging
- * only -- the capture runs on the engine's render thread and needs a few frames, so the page polls
- * getPreview afterwards rather than expecting an image back from this call. */
-static void poc_request_preview(const char *name)
+/* Asset browser: ask the backend worker to decode a named material or image (+0x2D8
+ * request_preview). Staging only -- the CPU worker reads installed data asynchronously, so the page
+ * polls getPreview afterwards rather than expecting an image back from this call. */
+static void poc_request_preview(const char *name, int asset_kind)
 {
     if (!g_webview) return;
     int ok = 0;
-    if (g_iface && g_iface->vtbl && g_iface->vtbl->request_preview && name && *name)
-        ok = g_iface->vtbl->request_preview(g_iface, name);
+    if (g_iface && g_iface->vtbl && g_iface->vtbl->request_preview && name && *name) {
+        std::string request_name;
+        const char *request = name;
+        if (asset_kind == SH_ASSET_IMAGE) {
+            request_name = SH_PREVIEW_IMAGE_ROUTE_PREFIX;
+            request_name += name;
+            request = request_name.c_str();
+        }
+        ok = g_iface->vtbl->request_preview(g_iface, request);
+    }
 
     std::wstring json = L"{\"kind\":\"previewRequested\",\"ok\":";
     json += ok ? L"true" : L"false";
@@ -1394,10 +1404,16 @@ static void poc_request_preview(const char *name)
     g_webview->PostWebMessageAsJson(json.c_str());
 }
 
-/* Assets browser: one asset type's catalog (+0x2E8 list_assets), sent ONCE per type per session and
- * cached by the page, which then filters client-side -- same convention as the event-def catalog
- * below. Materials alone are ~9,805 names and a few hundred KB, so each type is paged out of the
- * backend in chunks and concatenated here rather than crossing the bridge in one enormous message.
+static void poc_cancel_preview()
+{
+    if (g_iface && g_iface->vtbl && g_iface->vtbl->request_preview)
+        g_iface->vtbl->request_preview(g_iface, "");
+}
+
+/* Assets browser: one asset type's catalog (+0x2E8 list_assets), sent on demand and held in the
+ * page's bounded two-type cache, which then filters client-side. Materials alone are ~9,805 names
+ * plus atlas-only rows and a few hundred KB, so each type is paged out of the backend in chunks and
+ * concatenated here before one bridge response.
  *
  * Falls back to +0x2E0 list_materials when the backend predates ext 16, so a UI DLL paired with an
  * older backend still lists materials instead of coming up empty. */
@@ -2252,11 +2268,16 @@ static HRESULT on_message(ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventA
                 std::wstring doc; json_get_wstr(json, L"doc", doc);
                 poc_save_pins(w_to_utf8(doc));
             } else if (cmd == L"getPreview") {
-                poc_send_preview();
-            } else if (cmd == L"requestPreview") {
                 std::wstring nm; json_get_wstr(json, L"name", nm);
                 std::string n8 = w_to_utf8(nm);
-                poc_request_preview(n8.c_str());
+                poc_send_preview(n8.c_str());
+            } else if (cmd == L"requestPreview") {
+                std::wstring nm; json_get_wstr(json, L"name", nm);
+                int asset_kind = -1; json_get_int(json, L"assetKind", &asset_kind);
+                std::string n8 = w_to_utf8(nm);
+                poc_request_preview(n8.c_str(), asset_kind);
+            } else if (cmd == L"cancelPreview") {
+                poc_cancel_preview();
             } else if (cmd == L"camLock") {
                 int on = 0; json_get_int(json, L"on", &on);
                 g_cam_lock = (on != 0);

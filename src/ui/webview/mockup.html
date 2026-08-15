@@ -1401,7 +1401,8 @@
     // No decoder outside the game, so the preview honestly reports that rather than faking pixels.
     else if (o.cmd === 'requestPreview') { onMessage({kind:'previewRequested', ok:false, name:o.name,
       note:'Previews only decode in-game - there is no codec on the browser side.'}); }
-    else if (o.cmd === 'getPreview')     { onMessage({kind:'previewImage', ok:false}); }
+    else if (o.cmd === 'cancelPreview')  { /* preview: no producer or retained image to cancel */ }
+    else if (o.cmd === 'getPreview')     { onMessage({kind:'previewImage', ok:false, name:o.name}); }
     else if (o.cmd === 'findMaterial')   { onMessage({kind:'materialResult', found:false, name:o.name}); }
     // A real rect, so the browser-preview build can exercise the virtualmapping patch end to end:
     // material/snapmap/dynamic_block_textured_hell_cave_facade's actual .vmtr row.
@@ -3955,8 +3956,12 @@
       });
       if (which === 'prefabs') post({cmd:'listPrefabs'});
       if (which === 'timelines') tlMaybeAutoRefresh();   // catch stale content from a play-mode round-trip that happened while this tab wasn't visible
-      // The catalog is cached after the first fetch, so this is a no-op on every later visit.
-      if (which === 'assets') { abActive = abTabMount; abFetchAll(); }
+      // The selected catalog is cached after its first fetch, so later visits do not cross the bridge.
+      if (which === 'assets') { abActive = abTabMount; abOpenCatalog(abTabMount); }
+      else if (typeof abTabMount !== 'undefined') {
+        abForgetPreview(abTabMount);
+        abRenderTree(abTabMount); abRenderInsp(abTabMount);
+      }
       /* One decision point for the session, here and everywhere else: it wants the browser on
        * screen AND this window focused. Navigating away closes it, which stops any audition and
        * hands the editor back its audio -- neither may outlive the tab that started it. */
@@ -4816,8 +4821,29 @@
   abNames['pinned'] = [];
 
   var abTrees = {};                   /* type -> folder tree built from abNames[type] */
+  var abCounts = {};                  /* scalar counts survive catalog eviction for the rail */
+  var abCatalogLru = [];
+  var AB_CATALOG_CACHE_LIMIT = 2;      /* one current type for each of the two browser mounts */
   var abMounts = [];                  /* every mounted browser */
   var abActive = null;                /* the mount that owns the in-flight preview request */
+
+  /* Keep the cache bounded. The tab and modal are two mounts with independent type state, so two
+   * catalogs is the smallest limit that lets each reopen without immediately evicting the other.
+   * Counts are tiny and remain for the rail; names and their derived folder nodes are discarded. */
+  function abTouchCatalog(type) {
+    for (var i = abCatalogLru.length - 1; i >= 0; i--)
+      if (abCatalogLru[i] === type) abCatalogLru.splice(i, 1);
+    abCatalogLru.push(type);
+    while (abCatalogLru.length > AB_CATALOG_CACHE_LIMIT) {
+      var old = abCatalogLru.shift();
+      delete abNames[old];
+      delete abTrees[old];
+    }
+  }
+  function abCatalogResident(type) {
+    for (var i = 0; i < abCatalogLru.length; i++) if (abCatalogLru[i] === type) return true;
+    return false;
+  }
 
   /* --- folder tree ---------------------------------------------------------------------------
    * Names are paths ("textures/guis/snapmaps/poi/snap_poi_talk"), so the folder structure is
@@ -5039,13 +5065,13 @@
      * other set are both meaningless afterwards -- drop them rather than leaving a stale crumb trail
      * pointing at a folder the new list does not have. */
     m.el('xplat').addEventListener('change', function(){
-      m.xplat = this.checked; m.dir = ''; m.sel = null;
+      m.xplat = this.checked; m.dir = ''; abForgetPreview(m);
       abRenderTree(m); abRenderInsp(m);
     });
     m.el('rail').addEventListener('click', function(e){
       var it = e.target.closest ? e.target.closest('[data-type]') : null;
       if (!it) return;
-      m.type = it.getAttribute('data-type'); m.dir = ''; m.sel = null;
+      m.type = it.getAttribute('data-type'); m.dir = ''; abForgetPreview(m);
       abSyncXplat(m);
       abRenderRail(m); abRenderTree(m); abRenderInsp(m);
       abFetch(m);
@@ -5335,7 +5361,7 @@
     var place = '', ref = '';
     for (var i = 0; i < AB_TYPES.length; i++) {
       var t = AB_TYPES[i];
-      var n = abNames[t.id] ? abNames[t.id].length : 0;
+      var n = abNames[t.id] ? abNames[t.id].length : (abCounts[t.id] || 0);
       var row = '<div class="entity-item' + (m.type === t.id ? ' selected' : '')
               + '" data-type="' + t.id + '"'
               + (t.ref ? ' title="Browse and copy only - nothing on the map takes one directly"' : '') + '>'
@@ -5756,15 +5782,35 @@
   var AB_MAX_TRIES = 12, AB_INTERVAL_MS = 250;   /* ~3 s */
   function abStopPoll(m) { if (m.pvTimer) { clearInterval(m.pvTimer); m.pvTimer = null; } m.pvTries = 0; }
 
+  /* A data URI is the complete encoded asset, not a cheap handle. Drop it whenever its mount no
+   * longer presents that selection so the WebView does not retain both the JavaScript string and
+   * the decoded image after the user changes type, closes the modal, or leaves the Assets tab. */
+  function abForgetPreview(m) {
+    var hadRequest = !!(m.sel || m.pvTimer || m.pvUri);
+    abStopPoll(m);
+    m.sel = null;
+    m.pvUri = null;
+    m.pvNote = null;
+    if (hadRequest) post({cmd:'cancelPreview'});
+  }
+
   /* Only materials and images have a pixel route today (megapreview + imgpreview). Asking for a
    * preview of a sound or an entity def would burn the full poll budget and then blame the atlas,
    * so those say what they are up front instead. */
   function abPreviewable(type) { return type === 'material' || type === 'image'; }
 
+  function abPreviewKind(m) {
+    var selectedType = abType(abSelType(m));
+    return selectedType ? selectedType.kind : -1;
+  }
+
+  function abRequestPreview(m, path) {
+    post({cmd:'requestPreview', name:path, assetKind:abPreviewKind(m)});
+  }
+
   function abSelect(m, path) {
+    abForgetPreview(m);
     m.sel = path;
-    m.pvUri = null;
-    abStopPoll(m);
     abActive = m;
     if (m.mode === 'modal') {
       var pe = document.getElementById('amPath'), ce = document.getElementById('amCopy');
@@ -5788,7 +5834,7 @@
     m.pvNote = 'Loading a preview...';
     abRenderTree(m); abRenderInsp(m);
     abStatus(m, 'Requesting...');
-    post({cmd:'requestPreview', name: path});
+    abRequestPreview(m, path);
     /* Learn this material's atlas rect too, so the tiling dropdown can offer an aspect-corrected
      * rate for it. Only for materials we do not already have dimensions for -- the baked
      * cross-platform table and the session cache both answer without a round-trip. The reply is
@@ -5799,6 +5845,7 @@
 
   function onPreviewRequested(d) {
     var m = abActive; if (!m) return;
+    if (!m.sel || d.name !== m.sel || !abPreviewable(abSelType(m))) return;
     if (!d.ok) {
       abStopPoll(m);
       /* `note` is only ever set by the browser-preview stand-in; the real backend answers ok/not-ok
@@ -5819,11 +5866,12 @@
         abStatus(m, 'no preview'); abApplyImage(m);
         return;
       }
-      post({cmd:'getPreview'});
+      post({cmd:'getPreview', name:m.sel});
     }, AB_INTERVAL_MS);
   }
   function onPreviewImage(d) {
     var m = abActive; if (!m) return;
+    if (!m.sel || d.name !== m.sel || !abPreviewable(abSelType(m))) return;
     if (d.ok && d.uri) {
       abStopPoll(m);
       m.pvUri = d.uri; m.pvNote = null;
@@ -5834,33 +5882,34 @@
   }
 
   /* --- catalog fetch ---------------------------------------------------------------------------
-   * The full list (~9,800 names) crosses the bridge ONCE per session and is cached here, so
-   * filtering and drilling stay instant and never round-trip. */
+   * Only the selected type crosses the bridge, once per session. Its qualifier travels with it:
+   * Materials need the atlas-only set for carrier safety, and Sounds need the soundbank map for
+   * their folder tree. Unvisited rail rows stay as dashes instead of retaining every catalog. */
+  var abPinsFetched = 0;
+  var abPendingKinds = {};
+  function abRequestKind(kind) {
+    if (abPendingKinds[kind]) return;
+    abPendingKinds[kind] = 1;
+    post({cmd:'listAssets', assetKind:kind});
+  }
   function abFetch(m) {
     var t = abType(m.type);
     if (!t) return;                       /* pseudo-types (Pinned) have no catalog behind them */
-    if (abNames[m.type]) return;
-    /* This IS the retry path: a type whose names never arrived asks again the next time it is
-     * selected, which is why removing the Refresh button cost nothing. */
-    m.el('cnt').textContent = '...';
-    post({cmd:'listAssets', assetKind: t.kind});
+    abTouchCatalog(m.type);
+    if (!abNames[m.type]) {
+      m.el('cnt').textContent = '...';
+      abRequestKind(t.kind);
+    }
+    if (m.type === 'material' && !abVtOnly) abRequestKind(AB_KIND_VTONLY);
+    if (m.type === 'sound' && !abSndBank) abRequestKind(AB_KIND_SNDBANK);
   }
-  /* Pull EVERY catalog the first time the browser is opened, not just the selected one. The rail
-   * shows each type's size, and a rail of dashes until you click each row tells you nothing about
-   * what is in there -- the count is the whole point of putting it in the rail. It is one pass over
-   * files the backend has already parsed, and it makes switching types instant afterwards. */
-  function abFetchAll() {
-    for (var i = 0; i < AB_TYPES.length; i++)
-      if (!abNames[AB_TYPES[i].id]) post({cmd:'listAssets', assetKind: AB_TYPES[i].kind});
-    /* Not an AB_TYPES row -- see abVtOnly. Fetched alongside the catalogs so the carrier gate is
-     * accurate by the time anything is selected. */
-    if (!abVtOnly) post({cmd:'listAssets', assetKind: AB_KIND_VTONLY});
-    if (!abSndBank) post({cmd:'listAssets', assetKind: AB_KIND_SNDBANK});
-    /* Pins come from their own file, not the catalog -- asked for once per session alongside it. */
+  function abOpenCatalog(m) {
+    abFetch(m);
+    /* Pins come from their own file, not a catalog, and are shared by both mounts. */
     if (!abPinsFetched) { abPinsFetched = 1; post({cmd:'pinsLoad'}); }
   }
-  var abPinsFetched = 0;
   function onAssetList(d) {
+    delete abPendingKinds[d.assetKind];
     if (d.assetKind === AB_KIND_SNDBANK) {
       var map = {};
       var bl = (d.names || '').split('\n');
@@ -5896,6 +5945,13 @@
     if (!t) return;
     var names = (d.names || '').split('\n').filter(function(s){ return s.length > 0; });
     names.sort();
+    abCounts[t.id] = names.length;
+    /* A response can arrive after very rapid rail changes pushed its type out of the two-slot
+     * cache. Keep its scalar count but do not resurrect the discarded catalog. */
+    if (!abCatalogResident(t.id)) {
+      for (var stale = 0; stale < abMounts.length; stale++) abRenderRail(abMounts[stale]);
+      return;
+    }
     abNames[t.id] = names;
     abTrees[t.id] = null;
     for (var j = 0; j < abMounts.length; j++) {
@@ -6242,13 +6298,14 @@
     document.getElementById('amPath').textContent = abModalMount.sel || 'Nothing selected.';
     amOverlay.style.display = 'flex';
     abActive = abModalMount;
-    abFetchAll();
+    abOpenCatalog(abModalMount);
     abSyncSoundSession();   /* the modal is the browser too -- same mode, same one decision */
     var q = abModalMount.el('q'); if (q) q.focus();
   }
   function abCloseModal() {
     amOverlay.style.display = 'none';
-    abStopPoll(abModalMount);
+    abForgetPreview(abModalMount);
+    abRenderTree(abModalMount); abRenderInsp(abModalMount);
     abActive = abTabMount;
     /* Leaving the browser with a sound still playing is nobody's intent, and it would also leave
      * the editor soloed and background audio on. abSyncSoundSession keeps the session open when

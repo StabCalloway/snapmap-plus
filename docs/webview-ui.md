@@ -114,6 +114,32 @@ through it).
 Newest first. Each dated entry covers one working session's worth of change; the undated **Baseline**
 entry at the bottom is the original POC buildout, before this doc tracked dates per entry.
 
+### 2026-08-15 -- Asset browser requests only the catalog being viewed
+
+- **Opening Assets no longer transfers every category.** The previous first open posted 17 catalog
+  requests: all 15 categories plus both qualifier lists. The default Materials view now asks for
+  Materials and its atlas-only qualifier, plus the independently stored pin list. That keeps the
+  other 15 catalog payloads out of the WebView bridge and the page's JavaScript heap until the mapper
+  selects their category.
+- **Repeated opens cannot duplicate an in-flight request.** Each asset kind is marked pending until
+  its `assetList` response arrives; both browser mounts share the guard and a two-category LRU cache.
+  This is the smallest cache that can hold each mount's current view. Eviction drops names and folder
+  nodes but keeps the scalar rail count. A category switch requests exactly that category, with the
+  soundbank qualifier added only for Sounds.
+- **Image rows now produce image previews.** The UI already identified Images as previewable, but the
+  native producer accepted only material names. The request now carries the selected asset kind, so
+  direct image names enter the existing bounded BC1/BC3/BC7 decode and generation-safe publish path
+  without loading VMTR or losing to a same-named Material record.
+- **The native catalog now follows the same demand boundary.** The base resource indexes are reduced
+  to interned recognized-name/offset metadata after parsing, and irrelevant record classes from the
+  broader base-game index are dropped. Wwise event/bank metadata is loaded only for Sounds by
+  streaming the relevant tags; the decl-less `.vmtr` union is loaded only for Materials. Mega2
+  resolves selected entries directly from disk instead of retaining complete shard tables. Preview
+  bytes remain in the installed game files until a row is selected.
+- **Caches release what the view no longer owns.** Finished PNG transport is consume-on-read, hidden
+  mounts remove their data URI and cancel in-flight generations, late responses are checked against
+  the current name, the worker sleeps on an event, and atlas decode scratch is released after idle.
+
 ### 2026-08-10 -- Asset browser: Pinned, soundbanks, four more categories, and the duplicate rows
 
 - **Pinned**, a per-user shortlist at the top of the type rail. A star in the left gutter of every

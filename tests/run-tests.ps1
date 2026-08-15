@@ -25,8 +25,9 @@
 #   preview_test       -- generation-safe request/publish handoff and RGBA PNG payload
 #   bcn_test           -- BC1/BC3/BC7 vectors, padded dimensions, and overflow guards
 #   soundpreview_queue_test -- failed-kick rollback, FIFO preservation, overflow, and name bounds
-#   imgpreview_index_test -- bounded index parsing, catalog routing, SWF rewriting, and rollback
-#   imgpreview_catalog_test -- Wwise/decl union, bank preference, wrapper collapse, and VMTR paging
+#   imgpreview_index_test -- bounded parsing, compact-name ownership, catalog routing, and rollback
+#   imgpreview_catalog_test -- lazy optional unions, compact Wwise strings, direct images, and paging
+#   megapreview_io_test -- compact VMTR metadata and selected-entry Mega2 reads
 #   serialization_buffer_test -- timeline growth, terminal failures, retained capacity, and 32 MB cap
 # The JS checks run after the native suite:
 #   decl_overlay_test -- syntax-paint/text alignment for the Entity State editor
@@ -75,6 +76,7 @@ $tests = @(
     @{ name = "soundpreview_queue_test"; src = 'soundpreview_queue_test.c';                       arg = "" }
     @{ name = "imgpreview_index_test"; src = 'imgpreview_index_test.c ..\src\backend\bcn.c';      arg = "" }
     @{ name = "imgpreview_catalog_test"; src = 'imgpreview_catalog_test.c ..\src\backend\bcn.c';  arg = "" }
+    @{ name = "megapreview_io_test"; src = 'megapreview_io_test.c';                                 arg = "" }
     @{ name = "serialization_buffer_test"; src = 'serialization_buffer_test.cpp'; cxx = $true;     arg = "" }
 )
 if ($Doom) {

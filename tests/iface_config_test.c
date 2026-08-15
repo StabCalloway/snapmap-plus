@@ -13,8 +13,8 @@ SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, manipulation_in_progress) == 0x2C0);
 /* ext 12, appended 2026-07-30: FIND MATERIAL by name (cached-only lookup; the Revenant asset-viewport
  * tab's first probe). Same append-only convention -- offsets above unchanged. */
 SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, find_material) == 0x2C8);
-/* ext 13, appended 2026-07-30: GET PREVIEW -- the engine-rendered asset thumbnail as a
- * data:image/bmp;base64 URI (preview.c owns the encode and the cross-thread handoff). Append-only again:
+/* ext 13, appended 2026-07-30: GET PREVIEW -- consume the decoded asset thumbnail as a
+ * data:image/png;base64 URI (preview.c owns the encode and the cross-thread handoff). Append-only again:
  * every offset above is unchanged and only the total size grows. */
 SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, get_preview) == 0x2D0);
 /* ext 14, appended 2026-08-02: REQUEST PREVIEW -- render a NAMED material into the preview target, so

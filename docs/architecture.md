@@ -37,6 +37,33 @@ adds `class="dark"` to the embedded document root when needed, and only lets the
 visible after a successful `NavigationCompleted`. A returning dark-theme user therefore never sees a
 light or blank first frame.
 
+## The asset browser is a live installed-data view
+
+The asset browser does not ship or build a second asset library. Selecting a category posts that one
+kind through the existing interface, the host pages newline-delimited names from the backend, and the
+page keeps a two-category least-recently-used cache -- the minimum that lets the tab and modal retain
+their independent current categories without accumulating every list visited. Scalar counts remain
+for the rail. Materials and Sounds request one extra qualifier list for atlas-only rows and soundbank
+names respectively.
+
+The backend parses the game's installed resource indexes only when the first catalog or plain-image
+preview needs them. It retains interned names plus resource-file offsets and releases the raw index
+documents; record classes from the broader base-game box that cannot serve a list or preview route
+are discarded while parsing. Wwise event/bank metadata and the `.vmtr` name union have separate
+first-use gates. The Wwise XML is streamed for only bank and event tags, and VMTR names occupy an
+exact string pool rather than fixed-width slots. Event, bank-row, and decl-less-material pointer
+tables are also shrunk to their final deduplicated counts.
+
+A preview then seeks to the selected payload, reads and decodes that payload in memory, and publishes
+only the resulting thumbnail. Mega2 page lookup follows the same rule: one 4-byte page id and one
+16-byte offset/size entry are read for a selected cell instead of copying whole shard tables. The
+worker sleeps between requests, allocates decode scratch only for an atlas-backed preview, and
+releases it after an idle interval. Encoded previews are consumed by the page rather than retained
+on both sides of the interface. Image selections carry their catalog kind through the existing
+append-stable request slot, so a direct Image bypasses VMTR and cannot be captured by a same-named
+Material record. The large game files remain the source of truth and are never copied into the
+overlay.
+
 ## The 30 Hz manual think-loop
 
 The frontend runs its own pump (the same shape as OG `FUN_180015c04`), once per frame at roughly 30 Hz,

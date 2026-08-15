@@ -120,17 +120,29 @@ editor (run `sh` in the console if it doesn't auto-open). Full detail: [`webview
 
 ## The asset browser (Assets tab)
 
-Every category is enumerated **live from the game's own shipped containers** at startup — no
-pre-extraction step, no bundled asset list, and nothing shipped in this repo. Only assets from
-`snap_gameresources` are listed, with sounds as the deliberate exception (see below): SnapMap never
-mounts the base game's broader `gameresources.resources`, so a base-game-only model resolves in the
-editor as a black cube.
+Every category is enumerated **live from the game's own shipped containers** when it is first
+selected — no pre-extraction step, no bundled asset list, and nothing shipped in this repo. The
+browser requests only that category and any qualifier it needs (the atlas-only set for Materials or
+the soundbank map for Sounds), then keeps at most two category catalogs -- enough for the Assets tab
+and modal to retain independent current views. Older category names and folder nodes are evicted,
+while their scalar rail counts remain. Unvisited categories do not cross the WebView bridge or
+occupy the page's catalog cache. Only assets from `snap_gameresources` are listed, with sounds as the
+deliberate exception (see below): SnapMap never mounts the base game's broader
+`gameresources.resources`, so a base-game-only model resolves in the editor as a black cube.
+
+The native side is demand-driven too. Its first request parses the installed resource indexes into
+names and payload offsets, interns equal names in compact storage, drops base-game record classes no
+browser route can use, and releases the complete index buffers. Wwise metadata is not read until
+Sounds is selected; the XML is streamed for only event and bank tags, then reduced to one copy of
+each retained name. The `.vmtr` name union waits for Materials and uses exact strings rather than
+fixed-width rows. Preview payload bytes stay in the installed game files and only the selected record
+is read.
 
 | Category | What it holds |
 |---|---|
 | **Pinned** | The mapper's own shortlist, at the top of the rail. Any asset, of any type, starred from its row; one shared list rather than one per type, because "the things I am working with right now" is rarely all of one kind. Kept in `%LOCALAPPDATA%\snapmap-plus\pinned.json` — deliberately **not** in `config.json`, so a malformed pin list can only ever cost the pins (see [Persistent settings](#persistent-settings)). |
 | Materials | Surfaces. Previewed as real pixels — see below. The **union** of `material` decls and `.vmtr` megatexture atlas rows: a material is addressable by name *or* by rectangle and neither set contains the other, so a decl-only list hid thousands of rows that are paintable via Virtual Mapping. A **Cross Platform Textures** filter narrows the list to the 224 megatexture rects hand-tested to render identically on PC, Xbox and PlayStation. |
-| Images | The lower-level image records the materials sample. |
+| Images | The lower-level image records the materials sample. They preview directly through the same bounded BC1/BC3/BC7 container decoder used by non-atlased materials. |
 | Models | Props: `.lwo`, the `md6Def` set, and the `discreteAnimation` set — the last of these being the breakable/gib models that a `breakable` decl names, which are indexed under their own decl type and were invisible to a `model`-only catalog. |
 | **Modules** | The 232 `mega_blessed` palette modules — whole SnapMap rooms, placeable as a single entity that is both visible **and solid**. |
 | **Brush models** | Every other baked `.bmodel`: the individual wall, floor and detail pieces those modules are assembled from. Render-only. |
@@ -146,7 +158,13 @@ That decoder is a pure function — no renderer, no GPU, no virtual-texture stat
 — so a preview does not depend on the loaded map having the material on screen, which is what makes
 whole-catalog browsing possible at all. Materials with no atlas rect (roughly half) fall back to
 reading the image out of the `.index`/`.resources` containers and decoding BC1/BC3/BC7 directly.
-Sounds are auditioned through the editor's own preview path with working play/stop.
+Rows in the Images category enter that same container path at the image record instead of requiring
+a material decl first. The selected kind is preserved, so an Image bypasses VMTR and wins even when
+the installed index also contains a same-named Material. Sounds are auditioned through the editor's
+own preview path with working play/stop. Mega2 previews read only the selected cell's page id,
+offset/size entry, and payload; full shard tables are never copied into the process. The preview
+worker sleeps while idle, and both its decode scratch and completed encoded image are released when
+no longer needed.
 
 **Apply to selection** writes the asset into the selected entity's decl and commits immediately —
 one entity at a time, since it patches the decl the editor has open. **New entity** authors a

@@ -6,6 +6,71 @@ where our own reimplementation was wrong, not the original SnapHak's behavior; a
 (or faithful reproduction of) the *original's* behavior belongs in [`fidelity.md`](fidelity.md)
 instead. Entries are chronological, newest first.
 
+## 2026-08-15 — Asset catalogs retained complete source tables after parsing
+
+**What changed.** The installed resource indexes are now reduced to interned recognized-name and
+payload-offset metadata after their first use, releasing the complete raw index buffers. The broader
+base-game index keeps only material, image and sound records -- the routes that can actually serve
+this browser. The Wwise manifest is streamed only when Sounds or its soundbank qualifier is
+requested, retaining only event/bank tags transiently and one copy of each event and bank name. The
+decl-less `.vmtr` union is likewise deferred until Materials is requested.
+
+**The cost.** Opening any category previously loaded every optional catalog on the native side even
+after the UI stopped asking for them. It also retained the complete resource indexes and the complete
+Wwise XML document because catalog strings pointed into those buffers. That made an Images or Models
+request pay for sound and material-only metadata and kept tens of megabytes of source data alive.
+
+Against the installed files, the parser keeps 67,338 useful records rather than all 95,568 recognized
+records and reduces 30,173,667 raw index bytes to 2,855,718 interned name bytes. When Sounds is
+requested, 26,345,897 Wwise XML bytes stream through 2,026,023 relevant tag bytes and become 240,251
+retained string bytes. Together that is 53,423,595 fewer retained source bytes (50.9 MiB) after the
+sound catalog has been visited, before the additional record-array reduction.
+
+The Wwise event and bank-row pointer tables are now shrunk after deduplication too. On the installed
+manifest they retain 134,488 bytes for 1,513 event-only names and 7,649 bank rows instead of keeping
+1,179,648 bytes of parser growth capacity, removing another 1,045,160 bytes. The decl-less-material
+pointer table likewise shrinks from 16,384 to 14,144 bytes for its final 1,768 rows.
+
+Mega2 previously copied a touched shard's complete page index and offset table into memory. Across
+the 16 installed shards those tables total 71,224,640 bytes (67.9 MiB). Preview lookup now seeks to
+one 4-byte page id and one 16-byte offset/size entry, validates them against the file, then reads only
+the selected page payload. VMTR rect storage also falls from a fixed 1,703,936-byte row array to
+509,480 bytes of exact rows and names on the installed tables. Decode scratch is allocated only for
+an atlas-backed request and released after 30 seconds idle.
+
+Published PNG data is now consume-on-read. Changing type, selection, tab, or modal cancels the
+generation, releases an unconsumed backend buffer, and removes the WebView data URI; late replies are
+ignored by name. This prevents a finished or abandoned preview from remaining as duplicate encoded
+asset content.
+
+The native tests prove an Images request leaves both optional loaders untouched, the matching public
+list requests activate them, raw indexes can be released without invalidating interned names, every
+Wwise event/bank pointer lands in the compact owned pool, Mega2 reads selected entries without full
+table arrays, preview buffers are consumed or cancelled, and UI catalogs remain within two cache
+slots.
+
+## 2026-08-15 — Image rows were rejected or captured by a same-named Material
+
+**What changed.** The WebView now sends the selected asset kind with each preview request. The
+matched host carries an Image kind through the existing append-stable request slot, and the worker
+sends it straight to an Image-only producer before loading or searching VMTR. Materials keep their
+existing atlas-first and ordinary-image fallback. Both use the same bounded decode, downscale and
+generation-safe publish path.
+
+**The bug.** The Images category showed the same preview affordance as Materials, but selecting any
+image originally failed with "no material record." Allowing a direct-image fallback fixed that for
+most names but left an ambiguity: installed data contains names represented by both a Material and
+an Image record. Because the request carried only a name and material lookup ran first, an Images
+row with one of those names could preview the Material's mapped image instead of the selected Image.
+
+**Why.** The producer was written for material selections: its first operation was a
+`SH_ASSET_MATERIAL` lookup. Adding the Images category exposed both the missing direct-image case
+and the fact that a name alone cannot disambiguate overlapping catalog namespaces.
+
+The regression test builds a minimal 4x4 BC1 `.bimage` plus an unusable same-named Material in a
+temporary file and proves the typed Image path publishes the expected RGBA pixels. A worker test
+also proves that route does not initialize VMTR metadata or atlas scratch.
+
 ## 2026-08-10 — the asset catalog listed the same asset twice, because the game index is not a catalog
 
 **What changed.** `imgpreview.c` now collapses records that repeat a name within one resource box,

@@ -132,6 +132,52 @@ static void check_index_file(const char *path)
     free(buf);
 }
 
+/* Optional installed-data integration check. It exercises the production loaders against a user's
+ * own DOOM base directory, then reports the actual steady-state metadata sizes after compaction. */
+static void check_catalog_root(const char *root)
+{
+    reset_records();
+    memset(g_box, 0, sizeof g_box);
+    _snprintf_s(g_baseDir, sizeof g_baseDir, _TRUNCATE, "%s", root);
+
+    int snap = imgpreview_load_box(0, "snap_gameresources");
+    int game = imgpreview_load_box(1, "gameresources");
+    size_t raw = g_box[0].idxLen + g_box[1].idxLen;
+    size_t released = imgpreview_compact_names();
+    CHECK(snap == 1 && game == 1);
+    CHECK(released == raw);
+    CHECK(g_namePoolBytes > 0 && g_namePoolBytes < raw);
+    printf("catalog metadata compacted: %d records, %llu raw index bytes -> %llu name bytes\n",
+        g_recCount, (unsigned long long)raw, (unsigned long long)g_namePoolBytes);
+
+    char manifest[MAX_PATH];
+    _snprintf_s(manifest, sizeof manifest, _TRUNCATE,
+        "%s\\sound\\soundbanks\\pc\\soundbanksinfo.xml", root);
+    WIN32_FILE_ATTRIBUTE_DATA attrs;
+    unsigned long long manifestBytes = 0;
+    if (GetFileAttributesExA(manifest, GetFileExInfoStandard, &attrs))
+        manifestBytes = ((unsigned long long)attrs.nFileSizeHigh << 32) | attrs.nFileSizeLow;
+
+    imgpreview_load_sound_catalog();
+    CHECK(g_soundLoaded == 1);
+    CHECK(g_wwiseBytes > 0 && (manifestBytes == 0 || g_wwiseBytes < manifestBytes));
+    printf("Wwise metadata compacted: %llu XML bytes -> %llu relevant tag bytes -> %llu string bytes "
+           "(%d added events, %d bank rows)\n",
+        manifestBytes, (unsigned long long)g_wwiseTagBytes,
+        (unsigned long long)g_wwiseBytes, g_evCount, g_sbCount);
+
+    for (int b = 0; b < 2; ++b)
+        if (g_box[b].res) CloseHandle(g_box[b].res);
+    memset(g_box, 0, sizeof g_box);
+    free(g_namePool); g_namePool = NULL; g_namePoolBytes = 0;
+    free(g_wwise); g_wwise = NULL; g_wwiseBytes = 0;
+    g_wwiseSourceBytes = g_wwiseTagBytes = 0;
+    free(g_sb); g_sb = NULL; g_sbCount = 0;
+    free(g_ev); g_ev = NULL; g_evCount = 0;
+    free(g_rec); g_rec = NULL; g_recCount = 0;
+    g_soundLoaded = 0;
+}
+
 int main(int argc, char **argv)
 {
     unsigned char original[1024];
@@ -158,7 +204,57 @@ int main(int argc, char **argv)
         CHECK(g_rec[3].roff == 15);
         CHECK(g_rec[3].usz == 16 && g_rec[3].csz == 17);
     }
-    free(valid);
+    g_box[0].idx = valid;
+    g_box[0].idxLen = valid_len;
+    CHECK(imgpreview_compact_names() == valid_len);
+    CHECK(g_box[0].idx == NULL && g_box[0].idxLen == 0);
+    CHECK(g_namePool != NULL);
+    CHECK(g_namePoolBytes > 0 && g_namePoolBytes < valid_len);
+    CHECK(strcmp(g_rec[0].name, "models/props/crate.lwo") == 0);
+    CHECK(strcmp(g_rec[2].name, "swf/ui/panel.swf") == 0);
+    free(g_namePool); g_namePool = NULL; g_namePoolBytes = 0;
+
+    /* The broader box keeps only routes this browser can use. The same fixture parsed as box 1
+     * therefore retains its material record but not its model, brush-model, or SWF records. */
+    {
+        unsigned char *base = (unsigned char *)malloc(valid_len);
+        CHECK(base != NULL);
+        if (base) {
+            memcpy(base, original, valid_len);
+            reset_records();
+            CHECK(imgpreview_parse_box_index(1, base, valid_len) == 1);
+            CHECK(g_recCount == 1);
+            if (g_recCount == 1) {
+                CHECK(g_rec[0].kind == SH_ASSET_MATERIAL);
+                CHECK(g_rec[0].box == 1);
+                CHECK(strcmp(g_rec[0].name, "materials/final") == 0);
+            }
+            free(base);
+        }
+    }
+
+    /* Equal names across record kinds share one immutable pool string. The payload records remain
+     * distinct, but there is no reason to retain the same spelling twice. */
+    {
+        unsigned char duplicate[512] = {0};
+        duplicate[0] = 0x05; memcpy(duplicate + 1, "SER", 3);
+        put_be32(duplicate + 0x20, 2);
+        size_t o = 0x28;
+        put_record(duplicate, &o, "material", "shared/name", 1, 2, 3);
+        put_terminal_record(duplicate, &o, "image", "SHARED/NAME", 4, 5, 6);
+        unsigned char *owned = (unsigned char *)malloc(o);
+        CHECK(owned != NULL);
+        if (owned) {
+            memcpy(owned, duplicate, o);
+            reset_records();
+            CHECK(imgpreview_parse_box_index(0, owned, o) == 1);
+            g_box[0].idx = owned; g_box[0].idxLen = o;
+            CHECK(imgpreview_compact_names() == o);
+            CHECK(g_recCount == 2 && g_rec[0].name == g_rec[1].name);
+            CHECK(g_namePoolBytes == strlen("shared/name") + 1u);
+            free(g_namePool); g_namePool = NULL; g_namePoolBytes = 0;
+        }
+    }
 
     /* Every proper prefix of a declared four-record file must be rejected without retaining the
      * valid records that happened to precede the cut. A fresh copy is required because parsing
@@ -195,7 +291,12 @@ int main(int argc, char **argv)
         CHECK(imgpreview_parse_box_index(2, malformed, sizeof malformed) == 0);
     }
 
-    for (int i = 1; i < argc; ++i) check_index_file(argv[i]);
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--catalog-root") == 0 && i + 1 < argc)
+            check_catalog_root(argv[++i]);
+        else
+            check_index_file(argv[i]);
+    }
 
     free(g_rec); g_rec = NULL; g_recCount = 0;
     if (failures) {

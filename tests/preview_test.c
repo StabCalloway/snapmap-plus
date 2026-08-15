@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "../src/backend/preview.h"
+#include "../src/common/snapmap_plus_iface.h"
 
 static int failures;
 
@@ -96,22 +97,26 @@ int main(void)
 {
     char name[512];
     unsigned long first = 0, second = 0, repeated = 0;
+    int kind = 99;
     const unsigned char old_pixel[4] = {255, 0, 0, 255};
     const unsigned char pixels[8] = {1, 2, 3, 4, 10, 20, 30, 40};
 
-    CHECK(sh_preview_take_request(name, sizeof name, &first) == 0);
+    CHECK(sh_preview_take_request(name, sizeof name, &first, &kind) == 0);
+    CHECK(kind == SH_PREVIEW_KIND_AUTO);
     CHECK(sh_preview_publish(0, pixels, 2, 1) == SH_PREVIEW_FAILED);
     CHECK(sh_preview_publish(1, NULL, 2, 1) == SH_PREVIEW_FAILED);
 
     sh_preview_request("materials/first");
-    CHECK(sh_preview_take_request(name, sizeof name, &first) == 1);
+    CHECK(sh_preview_take_request(name, sizeof name, &first, &kind) == 1);
     CHECK(strcmp(name, "materials/first") == 0);
     CHECK(first != 0);
+    CHECK(kind == SH_PREVIEW_KIND_AUTO);
 
-    sh_preview_request("materials/second");
-    CHECK(sh_preview_take_request(name, sizeof name, &second) == 1);
+    sh_preview_request_kind("materials/second", SH_ASSET_IMAGE);
+    CHECK(sh_preview_take_request(name, sizeof name, &second, &kind) == 1);
     CHECK(strcmp(name, "materials/second") == 0);
     CHECK(second != first);
+    CHECK(kind == SH_ASSET_IMAGE);
 
     CHECK(sh_preview_publish(first, old_pixel, 1, 1) == SH_PREVIEW_STALE);
     {
@@ -121,7 +126,8 @@ int main(void)
     }
 
     CHECK(sh_preview_publish(second, pixels, 2, 1) == SH_PREVIEW_PUBLISHED);
-    CHECK(sh_preview_take_request(name, sizeof name, &repeated) == 0);
+    CHECK(sh_preview_take_request(name, sizeof name, &repeated, &kind) == 0);
+    CHECK(kind == SH_PREVIEW_KIND_AUTO);
     {
         char tiny[8];
         int needed = sh_preview_get(tiny, sizeof tiny);
@@ -135,16 +141,29 @@ int main(void)
                 CHECK(got == (int)strlen(uri));
                 verify_png(uri, pixels, 2, 1);
                 free(uri);
+                CHECK(sh_preview_get(tiny, sizeof tiny) == 0);
+                CHECK(sh_preview_take_request(name, sizeof name, &repeated, &kind) == 0);
+                CHECK(kind == SH_PREVIEW_KIND_AUTO);
             }
         }
     }
 
     sh_preview_request("materials/second");
-    CHECK(sh_preview_take_request(name, sizeof name, &repeated) == 1);
+    CHECK(sh_preview_take_request(name, sizeof name, &repeated, &kind) == 1);
     CHECK(repeated != second);
     CHECK(strcmp(name, "materials/second") == 0);
+    CHECK(kind == SH_PREVIEW_KIND_AUTO);
     CHECK(sh_preview_publish(second, old_pixel, 1, 1) == SH_PREVIEW_STALE);
     CHECK(sh_preview_publish(repeated, old_pixel, 1, 1) == SH_PREVIEW_PUBLISHED);
+    sh_preview_cancel();
+    {
+        char empty[8] = "dirty";
+        CHECK(sh_preview_get(empty, sizeof empty) == 0);
+        CHECK(empty[0] == '\0');
+        CHECK(sh_preview_take_request(name, sizeof name, &second, &kind) == 0);
+        CHECK(kind == SH_PREVIEW_KIND_AUTO);
+        CHECK(sh_preview_publish(repeated, old_pixel, 1, 1) == SH_PREVIEW_STALE);
+    }
 
     if (failures) {
         fprintf(stderr, "%d preview test(s) failed\n", failures);

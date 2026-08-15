@@ -27,11 +27,15 @@
  * `Mega2PageDecode` -- no hardcoded RVA -- so it is found wherever the loader put it, and a build
  * whose bytes do not match simply fails to resolve rather than calling into the wrong code.
  * `module_base` is still needed for the on-disk `virtualtextures` directory next to the exe.
- * Spawns one low-priority worker that serves preview requests staged through sh_preview_request.
+ * Spawns one low-priority worker that sleeps until a preview request wakes it. Decode scratch is
+ * allocated only for an atlas-backed request and released after an idle interval.
  *
  * Returns 1 if the worker started, 0 otherwise (NULL base, unresolved decoder, already installed).
  * Failure is non-fatal and only costs previews. */
 int sh_megapreview_install(const sig_result *results, size_t n, const uint8_t *module_base);
+
+/* Wake the producer after sh_preview_request stages a name. A no-op when installation failed. */
+void sh_megapreview_wake(void);
 
 /* A material's `.vmtr` atlas rect, written to out_xywh as {x, y, w, h} in atlas pixels. Returns 1
  * if the material is virtual-textured, 0 if it has no rect (which is the answer to "can this take
@@ -46,7 +50,7 @@ int sh_megapreview_rect(const char *name, int *out_xywh);
  * art by RECTANGLE, so a `virtualmapping` renderParm can paint any row here whether or not anyone
  * authored a decl for that name. Enumerating decls alone therefore under-reports the real catalog,
  * and the missing names are unreachable in a browser that only lists decls -- they cannot be
- * searched for, so they cannot be applied. imgpreview_load_vmtr_names folds these in. */
+ * searched for, so they cannot be applied. The material catalog folds these rows in on demand. */
 const char *sh_megapreview_name_at(int i);
 
 #endif /* BACKEND_MEGAPREVIEW_H */

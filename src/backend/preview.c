@@ -11,9 +11,9 @@
 #include "backend_log.h"
 
 /* ---- published image -------------------------------------------------------------------------------
- * The producer thread swaps-and-FREES this buffer while the UI thread may be reading it through iface
- * ext 13, so the two are serialized. SRWLOCK because it needs no runtime init and the read side is
- * shared: concurrent UI fetches do not contend with each other, only with the (rare) producer swap. */
+ * The producer publishes one buffer and the UI consumes it through iface ext 13. The same lock
+ * serializes publish, probe, consume, and request invalidation, so the backend releases the encoded
+ * asset as soon as its one consumer has copied it instead of retaining a duplicate indefinitely. */
 static char          *g_preview_b64   = NULL;
 static volatile LONG  g_preview_ready = 0;
 static SRWLOCK        g_preview_lock  = SRWLOCK_INIT;
@@ -23,6 +23,7 @@ static SRWLOCK        g_preview_lock  = SRWLOCK_INIT;
  * under the same lock as the image: contention is negligible (one write per user click) and one lock is
  * one fewer ordering rule to get wrong. */
 static char           g_requested[512] = { 0 };
+static int            g_requested_kind = SH_PREVIEW_KIND_AUTO;
 static volatile LONG  g_request_gen    = 0;
 
 int sh_preview_get(char *out, size_t cap)
@@ -30,7 +31,8 @@ int sh_preview_get(char *out, size_t cap)
     if (!out || cap == 0) return 0;
     out[0] = '\0';
 
-    AcquireSRWLockShared(&g_preview_lock);
+    char *consumed = NULL;
+    AcquireSRWLockExclusive(&g_preview_lock);
     int rc = 0;
     if (g_preview_ready && g_preview_b64) {
         size_t len = strlen(g_preview_b64);
@@ -39,41 +41,73 @@ int sh_preview_get(char *out, size_t cap)
         } else {
             memcpy(out, g_preview_b64, len + 1);
             rc = (int)len;
+            consumed = g_preview_b64;
+            g_preview_b64 = NULL;
+            g_requested[0] = '\0';
+            g_requested_kind = SH_PREVIEW_KIND_AUTO;
+            InterlockedExchange(&g_preview_ready, 0);
         }
     }
-    ReleaseSRWLockShared(&g_preview_lock);
+    ReleaseSRWLockExclusive(&g_preview_lock);
+    if (consumed) HeapFree(GetProcessHeap(), 0, consumed);
     return rc;
 }
 
 void sh_preview_request(const char *name)
 {
+    sh_preview_request_kind(name, SH_PREVIEW_KIND_AUTO);
+}
+
+void sh_preview_request_kind(const char *name, int kind)
+{
     if (!name || !*name) return;
 
     AcquireSRWLockExclusive(&g_preview_lock);
     strncpy_s(g_requested, sizeof g_requested, name, _TRUNCATE);
+    g_requested_kind = kind;
     /* Invalidate the current image BEFORE the generation bump, or a poll can see the new request with
      * the previous request's picture still marked ready and stop polling one image too early. */
+    char *superseded = g_preview_b64;
+    g_preview_b64 = NULL;
     InterlockedExchange(&g_preview_ready, 0);
     LONG gen = InterlockedIncrement(&g_request_gen);
     ReleaseSRWLockExclusive(&g_preview_lock);
+    if (superseded) HeapFree(GetProcessHeap(), 0, superseded);
 
     char line[600];
     _snprintf_s(line, sizeof line, _TRUNCATE,
-        "B2: preview REQUEST #%ld -- '%s' staged", gen, name);
+        "B2: preview REQUEST #%ld -- '%s' staged (%s)", gen, name,
+        kind == SH_PREVIEW_KIND_AUTO ? "automatic route" : "typed route");
     backend_log(line);
 }
 
-int sh_preview_take_request(char *out, size_t cap, unsigned long *generation)
+void sh_preview_cancel(void)
 {
-    if (!out || cap == 0 || !generation) return 0;
+    char *discarded = NULL;
+    AcquireSRWLockExclusive(&g_preview_lock);
+    g_requested[0] = '\0';
+    g_requested_kind = SH_PREVIEW_KIND_AUTO;
+    discarded = g_preview_b64;
+    g_preview_b64 = NULL;
+    InterlockedExchange(&g_preview_ready, 0);
+    InterlockedIncrement(&g_request_gen);   /* any producer already decoding now publishes stale */
+    ReleaseSRWLockExclusive(&g_preview_lock);
+    if (discarded) HeapFree(GetProcessHeap(), 0, discarded);
+}
+
+int sh_preview_take_request(char *out, size_t cap, unsigned long *generation, int *kind)
+{
+    if (!out || cap == 0 || !generation || !kind) return 0;
     out[0] = '\0';
     *generation = 0;
+    *kind = SH_PREVIEW_KIND_AUTO;
 
     AcquireSRWLockShared(&g_preview_lock);
     int pending = (!g_preview_ready && g_requested[0] != '\0');
     if (pending) {
         strncpy_s(out, cap, g_requested, _TRUNCATE);
         *generation = (unsigned long)g_request_gen;
+        *kind = g_requested_kind;
     }
     ReleaseSRWLockShared(&g_preview_lock);
     return pending;

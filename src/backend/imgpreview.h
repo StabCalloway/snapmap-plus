@@ -1,9 +1,10 @@
-/* imgpreview.h -- the SECOND preview producer: plain (non-megatexture) materials.
+/* imgpreview.h -- the SECOND preview producer: plain (non-megatexture) materials and direct images.
  *
  * megapreview.c serves the 5,033 materials that have a `.vmtr` atlas rect. This serves the rest,
  * which render fine in game but are backed by ordinary image assets in the `.index`/`.resources`
- * containers. Together they cover ~84% of the ~9,805-material catalog; the remainder are decals
- * and particles baked into shared atlases, which need a third route.
+ * containers, plus image names selected directly in the Assets browser. Together the material
+ * routes cover ~84% of the ~9,805-material catalog; the remainder are decals and particles baked
+ * into shared atlases, which need a third route.
  *
  * Read-only against the shipped containers, and no engine call at all: DEFLATE and BCn are public
  * formats, unlike the megatexture page codec which had to be called rather than reimplemented.
@@ -11,24 +12,26 @@
 #ifndef BACKEND_IMGPREVIEW_H
 #define BACKEND_IMGPREVIEW_H
 
-/* One-time setup. Cheap: the 15 MB indices are parsed lazily on the first request, so a user who
- * never opens the Assets tab pays nothing. Always returns 1. */
+/* One-time setup. Cheap: resource indexes are parsed lazily on the first request, and optional
+ * Wwise/.vmtr catalog metadata waits for its corresponding category. Always returns 1. */
 int sh_imgpreview_install(void);
 
-/* Resolve `name` -> material decl -> image asset -> RGBA, and publish through sh_preview_publish.
- * Returns 1 if something was published, 0 otherwise (no material record, decl names no usable
- * image, image missing, or an image format we do not decode). Call it only AFTER the megatexture
- * route has declined, since a VT-backed material has no image asset to find. */
+/* Resolve a material name through its decl to an image, or accept a direct image name, decode it to
+ * RGBA, and publish through sh_preview_publish. Returns 1 if something was published, 0 otherwise.
+ * Call it only AFTER the megatexture route has declined for a material request. */
 int sh_imgpreview_produce(const char *name, unsigned long generation);
+
+/* Decode exactly the named Image record. Unlike the compatibility producer above, this never treats a
+ * same-named Material as authoritative and is called before any VMTR work for a typed Image selection. */
+int sh_imgpreview_produce_image(const char *name, unsigned long generation);
 
 /* The SH_ASSET_* type ids live in the shared ABI header -- the UI sends one across the iface. */
 #include "../common/snapmap_plus_iface.h"
 
-/* Enumerate SnapMap asset names of one type for the Assets browser, newline-separated, starting at
- * index `start`. Returns how many names were written; 0 means "no more" (or the containers are
- * unreadable, or `kind` is out of range). The caller pages by adding the returned count to `start`
- * until it gets 0 -- materials alone are ~9,805 names and roughly 400 KB, too much for one
- * message. Only box 0 (`snap_gameresources`) is listed; see the note at the definition. */
+/* Enumerate installed asset names of one type for the Assets browser, newline-separated, starting
+ * at index `start`. Returns how many names were written; 0 means "no more" (or unavailable data).
+ * The caller pages by adding the returned count to `start`. Base index metadata is compacted after
+ * parsing; the Wwise sound union and decl-less .vmtr material union are loaded only for those kinds. */
 int sh_imgpreview_list(int kind, unsigned start, char *out, size_t cap);
 
 /* Does a decl of this SH_ASSET_* type with this exact name exist in the shipped containers? The

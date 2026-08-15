@@ -135,7 +135,7 @@ cd ..
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 ```
 
-By default this compiles and runs 22 **self-contained native tests** (no game needed):
+By default this compiles and runs 23 **self-contained native tests** (no game needed):
 
 - **`shield_format_test`** — the fault-record string formatter (pure logic).
 - **`hook_test`** — the inline-detour installer, exercised on a hand-laid scratch stub.
@@ -157,8 +157,12 @@ By default this compiles and runs 22 **self-contained native tests** (no game ne
 - **`preview_test`** — generation-safe request/publish handoff and RGBA-to-PNG payloads.
 - **`bcn_test`** — BC1/BC3/BC7 vectors, padded dimensions, truncation, and overflow guards.
 - **`soundpreview_queue_test`** — failed-kick rollback, FIFO preservation, overflow, and name bounds.
-- **`imgpreview_index_test`** — bounded index parsing, catalog routing, SWF rewriting, and rollback.
-- **`imgpreview_catalog_test`** — Wwise/decl union, bank preference, wrapper collapse, and VMTR paging.
+- **`imgpreview_index_test`** — bounded index parsing, compact-name ownership, catalog routing,
+  SWF rewriting, and rollback.
+- **`imgpreview_catalog_test`** — lazy optional unions, compact Wwise strings, direct-image
+  previews, bank preference, wrapper collapse, and VMTR paging.
+- **`megapreview_io_test`** — compact VMTR strings, on-demand scratch, and selected-entry Mega2
+  page lookup without retained shard tables.
 - **`serialization_buffer_test`** — timeline growth, terminal failures, retained capacity, and the 32 MB cap.
 
 The same command then runs three JavaScript contract tests for the declaration editor and asset browser.
@@ -197,8 +201,20 @@ A third test, `xinput_ordinal_test.c`, is a **runtime** cross-check of the XInpu
 a built DLL and calls its exports by ordinal. CI verifies that same invariant *statically* with `dumpbin` (the
 "XInput ordinal parity" step), so you normally don't need to run it by hand.
 
-CI runs the 22 self-contained native tests, three JavaScript contract tests, and the installer tests on every PR; the DOOM-image tests are local-only
+CI runs the 23 self-contained native tests, three JavaScript contract tests, and the installer tests on every PR; the DOOM-image tests are local-only
 (CI has no game image).
+
+After the normal test run has built its executables, contributors with DOOM installed can also
+exercise catalog parsing and metadata compaction against their own installed files:
+
+```powershell
+tests\obj\imgpreview_index_test.exe --catalog-root "C:\path\to\DOOM\base"
+tests\obj\megapreview_io_test.exe --virtualtextures-root "C:\path\to\DOOM\virtualtextures"
+```
+
+These optional checks print recognized-record counts, streamed and retained metadata sizes, and the
+Mega2 table bytes left on disk. They read the indexes, Wwise manifest, VMTR tables, and Mega2 headers
+in place; they do not write to the game directory.
 
 ## 8. The pull-request workflow
 
