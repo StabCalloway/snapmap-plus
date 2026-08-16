@@ -1539,6 +1539,14 @@ static void poc_send_entity_assets()
 }
 static void poc_post_json(const wchar_t *json) { if (g_webview) g_webview->PostWebMessageAsJson(json); }
 
+static void poc_post_window_state(HWND hwnd)
+{
+    if (!hwnd) return;
+    poc_post_json(IsZoomed(hwnd)
+        ? L"{\"kind\":\"windowState\",\"maximized\":true}"
+        : L"{\"kind\":\"windowState\",\"maximized\":false}");
+}
+
 /* The two append-only config slots transport canonical JSON fragments. The getter is deliberately
  * retried because another process can replace config.json between its size query and copy call. */
 static int poc_config_get_json(const std::string &key, std::string &value,
@@ -2059,7 +2067,10 @@ static std::string crash_collect_logs()
 static LRESULT CALLBACK PocWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
-    case WM_SIZE: if (g_controller) { RECT rc; GetClientRect(hwnd, &rc); g_controller->put_Bounds(rc); } return 0;
+    case WM_SIZE:
+        if (g_controller) { RECT rc; GetClientRect(hwnd, &rc); g_controller->put_Bounds(rc); }
+        poc_post_window_state(hwnd);
+        return 0;
     case WM_CLOSE: return 0;   /* inert: don't let the user close the UI while in the editor (would need a map reload) */
     case WM_NCCALCSIZE:
         /* frameless: consume the non-client area so the client (WebView2) fills the window and the native
@@ -2352,6 +2363,9 @@ static HRESULT on_message(ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventA
                 ShowWindow(g_hwnd, SW_MINIMIZE);
             } else if (cmd == L"winMax") {
                 ShowWindow(g_hwnd, IsZoomed(g_hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+                poc_post_window_state(g_hwnd);
+            } else if (cmd == L"winState") {
+                poc_post_window_state(g_hwnd);
             } else if (cmd == L"winDrag") {
                 ReleaseCapture();
                 SendMessageW(g_hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);   /* start the native move loop */

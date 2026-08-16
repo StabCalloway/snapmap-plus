@@ -26,6 +26,8 @@ DLL ships.
 |---|---|
 | `src/ui/webview/snapmap_plus_ui_webview.cpp` | The WebView2 host: the `sh_ui_init` entry, a Win32 window, the WebView2 bring-up, the 30 Hz think-loop, and the JS <-> native bridge. |
 | `src/ui/webview/mockup.html` | The UI (HTML/CSS/JS), embedded into the DLL at build time. Self-populates with sample data when opened in a plain browser (a "preview mode", inert in DOOM). |
+| `src/ui/webview/preview.html` | Standalone phone/Tailscale preview shell. It scales the fixed 1440x900 mockup as one desktop canvas, fits it to the available width, and centers it between black bars. It is not embedded or shipped. |
+| `src/ui/webview/LUCIDE_LICENSE.md` | License notice for the small Lucide SVG subset embedded in `mockup.html`. |
 | `src/ui/webview/theme_bootstrap.{h,cpp}` | The small pure helper that validates the registered theme JSON and seeds the embedded document's root class before WebView2 navigation. |
 | `src/ui/build.ps1` | Builds `build/webview/snapmap-plus-ui.dll`: fetches the WebView2 SDK from NuGet into `build/` (gitignored), statically links the loader, embeds the HTML. Reuses `sl_exports.cpp` + `snapmap-plus-ui.def`. Invoked by the repo-root `build.ps1` (backend + frontend in lockstep). |
 
@@ -113,6 +115,33 @@ through it).
 
 Newest first. Each dated entry covers one working session's worth of change; the undated **Baseline**
 entry at the bottom is the original POC buildout, before this doc tracked dates per entry.
+
+### 2026-08-15 -- Letterboxed phone preview
+
+- **The remote preview now presents the native desktop canvas instead of reflowing it for a phone.**
+  `preview.html` holds `mockup.html` at the app's fixed 1440x900 design size and scales the complete frame
+  to the available viewport width. The result remains centered in a black viewport, with equal black
+  space above and below rather than stretching to the phone's full height.
+- **The shell is preview-only.** It is never embedded into the WebView2 DLL and does not alter the native
+  window, the mockup's layout, or production behavior.
+- **Pinch zoom remains under browser control.** The shell measures the stable layout viewport and ignores
+  visual-viewport resize events while the user is zoomed, so a two-finger expansion enlarges the canvas
+  instead of triggering an equal and opposite fit-to-width rescale.
+
+### 2026-08-15 -- Shared Lucide chrome and compact actions
+
+- **Plus now uses the same icon language as MIDI.** A curated, inline Lucide SVG sprite replaces the
+  browser-font glyphs in the frameless window controls and the high-frequency compact actions:
+  refresh, copy, focus mode, dropdowns, diagnostics, tree disclosure, pinning, timeline add/remove,
+  prefab folder controls, and sound audition. The full notice lives beside the source and inside the
+  embedded document so the two-DLL installed overlay retains it.
+- **The window chrome now matches MIDI's spacing.** Minimize and maximize/restore are 38 px controls
+  flush with the right edge. The host reports actual maximize state after resize, Aero Snap, and
+  maximize/restore commands, so the square changes to the restore icon reliably. Keyboard activation
+  is supported in both the native window and the standalone browser preview.
+- **There is still deliberately no close control.** `WM_CLOSE` remains inert because destroying the
+  editor UI mid-session cannot currently be reversed without reloading the map. The cleaner chrome
+  preserves that product invariant instead of presenting a control that cannot behave safely.
 
 ### 2026-08-15 -- Asset browser requests only the catalog being viewed
 
@@ -891,4 +920,6 @@ Genuinely open items only -- fixed bugs and completed work live in the Changelog
 Open `src/ui/webview/mockup.html` directly in a browser to see and click through the UI with fake data --
 useful for iterating on layout/behavior without building or deploying. This preview branch only runs when
 there is no WebView2 host, so it has no effect inside DOOM. The preview remembers its theme in browser
-`localStorage`; production uses the backend-owned `config.json` service instead.
+`localStorage`; production uses the backend-owned `config.json` service instead. For a phone-sized remote
+review, open `src/ui/webview/preview.html`: it keeps the mockup at its native 1440x900 viewport, scales the
+whole canvas to fit the device width, and letterboxes the remaining height in black.

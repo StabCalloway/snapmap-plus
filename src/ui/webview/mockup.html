@@ -28,6 +28,8 @@
     color-scheme: dark;
   }
   .app { display: flex; flex-direction: column; height: 100vh; background: var(--bg); color: var(--text); user-select: none; -webkit-user-select: none; }
+  .icon-sprite { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
+  .ui-icon { width: 16px; height: 16px; display: block; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
 
   .menubar { display: flex; align-items: center; height: 30px; background: var(--chrome); border-bottom: 1px solid var(--border); padding: 0 6px; gap: 8px; flex-shrink: 0; user-select: none; }
   .menubar .icon { width: 16px; height: 16px; border-radius: 3px; margin-left: 4px; display: block; }
@@ -36,9 +38,11 @@
   .theme-toggle { display: inline-flex; border: 1px solid var(--border2); border-radius: 20px; overflow: hidden; cursor: pointer; }
   .theme-toggle span { padding: 3px 11px; color: var(--muted); }
   .theme-toggle span.on { background: var(--accent); color: var(--accentText); }
-  .win-controls { display: flex; margin-left: 8px; }
-  .win-btn { width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; cursor: default; }
+  .win-controls { display: flex; align-items: stretch; align-self: stretch; gap: 0; margin-left: 8px; margin-right: -6px; padding: 0; }
+  .win-btn { width: 38px; height: 30px; display: flex; align-items: center; justify-content: center; padding: 0 12px; border-radius: 0; color: var(--muted); cursor: default; }
+  .win-btn .ui-icon { width: 14px; height: 14px; stroke-width: 1.8; }
   .win-btn:hover { background: var(--panel2); color: var(--text); }
+  .win-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
   .rz { position: fixed; z-index: 2500; }
   .rz-t { top: 0; left: 0; right: 0; height: 4px; cursor: ns-resize; }
   .rz-b { bottom: 0; left: 0; right: 0; height: 4px; cursor: ns-resize; }
@@ -76,6 +80,8 @@
                         color: var(--muted); padding: 8px 7px 3px; }
   .ab-rail .rail-head:first-child { padding-top: 3px; }
   .ab-rail .entity-item { display: flex; align-items: baseline; gap: 6px; color: var(--text); cursor: pointer; }
+  .ab-rail .entity-item .nm { display: inline-flex; align-items: center; gap: 5px; }
+  .ab-rail .entity-item .nm .ui-icon { width: 13px; height: 13px; fill: currentColor; }
   .ab-rail .entity-item.off { color: var(--muted); opacity: .6; cursor: default; }
   .ab-rail .entity-item.off:hover { background: transparent; }
   .ab-rail .entity-item .n { margin-left: auto; color: var(--muted); font-family: Consolas, "Courier New", monospace;
@@ -96,16 +102,18 @@
   .ab-crumbs .cb-flat { font-style: italic; }
 
   .ab-row { display: flex; align-items: center; gap: 6px; }
-  .ab-row .tw { width: 10px; flex: 0 0 10px; color: var(--muted); font-size: 9px; text-align: center; }
+  .ab-row .tw { width: 12px; flex: 0 0 12px; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; }
+  .ab-row .tw .ui-icon { width: 12px; height: 12px; }
   .ab-row .nm { overflow: hidden; text-overflow: ellipsis; }
   .ab-row .leaf { font-family: Consolas, "Courier New", monospace; font-size: 11px; }
   .ab-row .cnt { margin-left: auto; color: var(--muted); font-family: Consolas, "Courier New", monospace;
                  font-size: 10px; font-variant-numeric: tabular-nums; }
   /* Copy rides ON the row: pasting a path into the Decl Text editor is the most common thing done
      with a name here, so it must not be buried behind selecting the asset first. */
-  .ab-row .cp { margin-left: auto; opacity: 0; border: 1px solid var(--border2); background: var(--panel);
-                color: var(--muted); border-radius: 4px; padding: 0 5px; font-size: 10px; cursor: pointer;
-                font-family: inherit; flex-shrink: 0; }
+  .ab-row .cp { width: 23px; height: 21px; margin-left: auto; opacity: 0; border: 1px solid var(--border2);
+                background: var(--panel); color: var(--muted); border-radius: 4px; padding: 0; cursor: pointer;
+                display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .ab-row .cp .ui-icon { width: 12px; height: 12px; }
   .entity-item:hover .cp, .entity-item.selected .cp { opacity: 1; }
   .ab-row .cp:hover { border-color: var(--accent); color: var(--text); }
   /* The pin flag is a GUTTER on the left, not one of the right-hand actions: it reports state, and
@@ -120,14 +128,16 @@
      star can grow past the text without every row in the list getting taller. */
   .ab-row .ab-pin, .ab-row .ab-pin-gap { width: 18px; flex: 0 0 18px; }
   .ab-row .ab-pin { opacity: 0; border: 0; background: none; color: var(--muted);
-                    padding: 0; font-size: 18px; line-height: 1; height: 16px; cursor: pointer;
+                    padding: 0; line-height: 1; height: 16px; cursor: pointer;
                     font-family: inherit; display: inline-flex; align-items: center;
                     justify-content: center; }
+  .ab-row .ab-pin .ui-icon { width: 16px; height: 16px; }
   .entity-item:hover .ab-pin { opacity: .55; }
   .ab-row .ab-pin:hover { opacity: 1; color: var(--accent); }
   /* A PINNED row keeps its flag visible without hover -- otherwise the only way to see what you
      pinned is to hover every row one at a time, which defeats the point of a shortlist. */
   .ab-row .ab-pin.on { opacity: 1; color: var(--accent); }
+  .ab-row .ab-pin.on .ui-icon { fill: currentColor; }
 
   .ab-insp .panel-body { padding: 10px; display: flex; flex-direction: column; gap: 9px; }
   /* Checkerboard: many assets are white-on-transparent (GUI icons, decals, POI markers). On a flat
@@ -148,6 +158,7 @@
   .ab-audition.playing { border-color: var(--accent); }
   .ab-audition .ab-play { width: 54px; height: 54px; border-radius: 50%; font-size: 17px; line-height: 1;
                           padding: 0; display: flex; align-items: center; justify-content: center; }
+  .ab-audition .ab-play .ui-icon { width: 18px; height: 18px; }
   .ab-audition.playing .ab-play { border-color: var(--accent); color: var(--accent); }
   .ab-audition-note { color: var(--muted); font-size: 11px; }
   .ab-audition.playing .ab-audition-note { color: var(--text); }
@@ -222,7 +233,8 @@
   .btn:disabled { opacity: 0.5; cursor: default; }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accentText); }
   .btn.danger:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
-  .btn.icon { padding: 3px 8px; font-size: 12px; }
+  .btn.icon { width: 27px; height: 27px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+  .btn.icon .ui-icon { width: 14px; height: 14px; }
 
   .placeholder { display: flex; align-items: center; justify-content: center; text-align: center; color: var(--muted); font-style: italic; padding: 20px; }
   .editor-col { display: flex; flex-direction: column; min-height: 0; height: 100%; }
@@ -318,7 +330,8 @@
   .problems.has { display: block; }
   .prob { display: flex; gap: 7px; padding: 1px 0; border-radius: 3px; cursor: default; }
   .prob:hover { background: var(--sel); color: var(--selText); }
-  .prob .sev { flex-shrink: 0; font-weight: 600; }
+  .prob .sev { width: 14px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; font-weight: 600; }
+  .prob .sev .ui-icon { width: 13px; height: 13px; }
   .prob .sev.err { color: var(--sqErr); } .prob .sev.warn { color: var(--sqWarn); }
   .prob .loc { color: var(--muted); flex-shrink: 0; }
 
@@ -328,7 +341,8 @@
   .desc-panel { flex-shrink: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); cursor: pointer; }
   .desc-toggle { display: flex; align-items: center; gap: 6px; padding: 6px 9px; color: var(--muted); user-select: none; border-radius: 6px; }
   .desc-toggle:hover { color: var(--selText); background: var(--sel); }   /* same hover pair as .combo-opt -- visible in both themes */
-  .desc-caret { width: 12px; display: inline-block; font-size: 12px; transition: transform 0.1s; }
+  .desc-caret { width: 12px; display: inline-flex; align-items: center; justify-content: center; transition: transform 0.1s; }
+  .desc-caret .ui-icon { width: 12px; height: 12px; }
   .desc-panel.open .desc-caret { transform: rotate(90deg); }
   .desc-body { display: none; padding: 0 9px 9px 9px; font-size: 11px; line-height: 1.5; }
   .desc-panel.open .desc-body { display: block; }
@@ -341,7 +355,8 @@
   .combo { position: relative; display: inline-flex; }
   .combo.grow { flex: 1; min-width: 150px; }
   .combo input { flex: 1; border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: none; min-width: 0; }
-  .combo-arrow { width: 20px; border: 1px solid var(--border2); border-top-right-radius: 5px; border-bottom-right-radius: 5px; background: var(--panel2); cursor: pointer; font-size: 9px; color: var(--muted); padding: 0; }
+  .combo-arrow { width: 24px; border: 1px solid var(--border2); border-top-right-radius: 5px; border-bottom-right-radius: 5px; background: var(--panel2); cursor: pointer; color: var(--muted); padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+  .combo-arrow .ui-icon { width: 12px; height: 12px; }
   .combo-arrow:hover { color: var(--text); }
   /* the base .combo-list opens DOWNWARD: every combo now sits at the TOP of its panel (the Entities-tab
      Inherit/Classname fields moved above the decl editor), so down is always the roomy direction. */
@@ -359,7 +374,9 @@
   .tl-inner-tab.active { color: var(--text); border-bottom-color: var(--accent); }
   .tl-inner-tab:hover:not(.active) { color: var(--text); }
   .tl-inner-tab.tl-add { font-weight: 600; }
-  .tl-tab-del { width: 15px; height: 15px; display: flex; align-items: center; justify-content: center; border-radius: 3px; color: var(--muted); font-size: 10px; flex-shrink: 0; }
+  .tl-inner-tab.tl-add .ui-icon { width: 13px; height: 13px; }
+  .tl-tab-del { width: 15px; height: 15px; display: flex; align-items: center; justify-content: center; border-radius: 3px; color: var(--muted); flex-shrink: 0; }
+  .tl-tab-del .ui-icon { width: 11px; height: 11px; }
   .tl-tab-del:hover { background: #a3352f; color: #fff; }
   .tl-inner-body { flex: 1; display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow: auto; padding-top: 2px; }
   .event-list { display: flex; flex-direction: column; gap: 6px; }
@@ -383,6 +400,7 @@
   .ev-vecn-fields input.ev-arg-input { flex: 1; min-width: 0; text-align: center; }   /* per-component (x/y/z, r/g/b/a, ...) -- placeholder names the component, no separate <label> per field */
   .ev-arg-row .combo.ev-arg-combo { flex: 1; min-width: 0; }   /* decl/enum -- fills the row same as the plain-text arg inputs */
   .ev-del { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; color: var(--muted); cursor: default; border-radius: 5px; flex-shrink: 0; }
+  .ev-del .ui-icon { width: 13px; height: 13px; }
   .ev-del:hover { background: #a3352f; color: #fff; }
 
   /* the OG "Runs on" entity-picker (FUN_180008180, live-decompiled from the original snaphakui.dll for
@@ -405,7 +423,8 @@
 
   .pf-folder-head { display: flex; align-items: center; gap: 4px; padding: 3px 6px; color: var(--text); cursor: default; font-weight: 500; }
   .pf-folder-head:hover { background: var(--panel2); }
-  .pf-caret { width: 12px; display: inline-block; color: var(--muted); font-size: 9px; }
+  .pf-caret { width: 12px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); }
+  .pf-caret .ui-icon { width: 12px; height: 12px; }
   .pf-folder:not(.pf-open) .pf-folder-body { display: none; }
   .pf-folder:not(.pf-open) .pf-caret { transform: rotate(-90deg); }
   .pf-folder-body { padding-left: 14px; }
@@ -415,7 +434,8 @@
   .pf-item.dragging { opacity: 0.4; }
   .pf-folder.drop-target > .pf-folder-head { background: var(--sel); color: var(--selText); }
   #prefabTree.drop-target-root { outline: 1px dashed var(--accent); outline-offset: -1px; }
-  .pf-folder-del { margin-left: auto; padding: 0 4px; color: var(--muted); opacity: 0; }
+  .pf-folder-del { width: 20px; height: 20px; margin-left: auto; padding: 0; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); opacity: 0; }
+  .pf-folder-del .ui-icon { width: 12px; height: 12px; }
   .pf-folder-head:hover .pf-folder-del { opacity: 1; }
   .pf-folder-del:hover { color: #a3352f; }
   .pf-folder-name { width: 130px; padding: 1px 5px; }
@@ -476,6 +496,64 @@
 </style>
 </head>
 <body>
+<!--
+Lucide Icons license notice. This copy stays in the embedded document so the compiled WebView asset
+retains the notice even though the installed overlay contains only the frontend and backend DLLs.
+
+ISC License
+
+Copyright (c) 2026 Lucide Icons and Contributors
+
+Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee
+is hereby granted, provided that the above copyright notice and this permission notice appear in all
+copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE
+INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE
+LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER
+RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+Some Lucide icons are derived from the Feather project.
+
+The MIT License (MIT)
+
+Copyright (c) 2013-present Cole Bemis
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
+and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial
+portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+-->
+<svg class="icon-sprite" aria-hidden="true" focusable="false">
+  <symbol id="icon-minus" viewBox="0 0 24 24"><path d="M5 12h14"></path></symbol>
+  <symbol id="icon-square" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"></rect></symbol>
+  <symbol id="icon-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></symbol>
+  <symbol id="icon-x" viewBox="0 0 24 24"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></symbol>
+  <symbol id="icon-play" viewBox="0 0 24 24"><path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"></path></symbol>
+  <symbol id="icon-triangle-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></symbol>
+  <symbol id="icon-circle-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></symbol>
+  <symbol id="icon-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"></path></symbol>
+  <symbol id="icon-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></symbol>
+  <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M5 12h14"></path><path d="M12 5v14"></path></symbol>
+  <symbol id="icon-refresh-cw" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path><path d="M8 16H3v5"></path></symbol>
+  <symbol id="icon-maximize-2" viewBox="0 0 24 24"><path d="M15 3h6v6"></path><path d="m21 3-7 7"></path><path d="m3 21 7-7"></path><path d="M9 21H3v-6"></path></symbol>
+  <symbol id="icon-minimize-2" viewBox="0 0 24 24"><path d="m14 10 7-7"></path><path d="M20 10h-6V4"></path><path d="m3 21 7-7"></path><path d="M4 14h6v6"></path></symbol>
+  <symbol id="icon-undo-2" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"></path><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"></path></symbol>
+  <symbol id="icon-save" viewBox="0 0 24 24"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"></path><path d="M17 21v-8H7v8"></path><path d="M7 3v5h8"></path></symbol>
+  <symbol id="icon-arrow-up" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7"></path><path d="M12 19V5"></path></symbol>
+  <symbol id="icon-star" viewBox="0 0 24 24"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.12 2.12 0 0 0 1.595 1.16l5.166.751a.53.53 0 0 1 .294.904l-3.738 3.644a2.12 2.12 0 0 0-.609 1.878l.882 5.146a.53.53 0 0 1-.769.559l-4.62-2.428a2.12 2.12 0 0 0-1.973 0L6.393 21.01a.53.53 0 0 1-.769-.559l.882-5.146a2.12 2.12 0 0 0-.609-1.878L2.159 9.783a.53.53 0 0 1 .294-.904l5.166-.751a2.12 2.12 0 0 0 1.595-1.16z"></path></symbol>
+</svg>
 <div class="app">
   <div class="menubar">
     <!-- the Snapmap+ logo rides inline as a data URI: the page is loaded from a string, so no external file or URL would resolve -->
@@ -487,8 +565,8 @@
       <span id="segDark">Dark</span>
     </div>
     <div class="win-controls">
-      <div class="win-btn" id="winMin" title="Minimize">&#8211;</div>
-      <div class="win-btn" id="winMax" title="Maximize / Restore">&#9633;</div>
+      <div class="win-btn" id="winMin" title="Minimize" role="button" tabindex="0"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-minus"></use></svg></div>
+      <div class="win-btn" id="winMax" title="Maximize" role="button" tabindex="0"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-square"></use></svg></div>
     </div>
   </div>
 
@@ -515,7 +593,7 @@
       <div class="panel-head">
         <span class="panel-title">Entities</span><span class="badge" id="entBadge">0</span>
         <div class="panel-actions">
-          <button class="btn icon" id="refreshBtn" title="Refresh the entity list">&#8635;</button>
+          <button class="btn icon" id="refreshBtn" title="Refresh the entity list" aria-label="Refresh the entity list"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-refresh-cw"></use></svg></button>
         </div>
       </div>
       <div class="panel-toolbar">
@@ -548,18 +626,18 @@
           <div class="ident-sub">
             <label>ID</label>
             <input type="text" id="fEntityId" readonly>
-            <button type="button" class="btn icon" id="copyIdBtn" title="Copy this entity's ID to the clipboard">Copy</button>
+            <button type="button" class="btn icon" id="copyIdBtn" title="Copy this entity's ID to the clipboard" aria-label="Copy this entity's ID"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-copy"></use></svg></button>
           </div>
         </div>
         <div class="fields">
-          <div class="field grow"><label>Inherit</label><div class="combo grow" id="cInherit"><input type="text" id="fInherit" autocomplete="off"><button type="button" class="combo-arrow">&#9662;</button><div class="combo-list"></div></div></div>
-          <div class="field grow"><label>Classname</label><div class="combo grow" id="cClassname"><input type="text" id="fClassname" autocomplete="off"><button type="button" class="combo-arrow">&#9662;</button><div class="combo-list"></div></div></div>
+          <div class="field grow"><label>Inherit</label><div class="combo grow" id="cInherit"><input type="text" id="fInherit" autocomplete="off"><button type="button" class="combo-arrow" aria-label="Show inherit options"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron-down"></use></svg></button><div class="combo-list"></div></div></div>
+          <div class="field grow"><label>Classname</label><div class="combo grow" id="cClassname"><input type="text" id="fClassname" autocomplete="off"><button type="button" class="combo-arrow" aria-label="Show classname options"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron-down"></use></svg></button><div class="combo-list"></div></div></div>
           <div class="field grow"><label>Displayname</label><input type="text" id="fDisplayname"></div>
         </div>
         <div class="section-label">Decl Text
           <span class="prob-count" id="probCount"></span>
           <div class="focus-head" id="focusHead"></div>
-          <button type="button" class="btn icon" id="declFocusBtn" title="Focus mode (Esc to exit)">&#10531;</button>
+          <button type="button" class="btn icon" id="declFocusBtn" title="Focus mode (Esc to exit)" aria-label="Enter focus mode"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-maximize-2"></use></svg></button>
         </div>
         <div class="code-editor" id="codeEditor">
           <div class="ce-gutter" aria-hidden="true"><div id="declGutter"></div></div>
@@ -570,7 +648,7 @@
         <div class="problems" id="problemsBar"></div>
         <div style="height:8px; flex-shrink:0;"></div>
         <div class="desc-panel" id="descPanel">
-          <div class="desc-toggle" id="descToggle"><span class="desc-caret">&#9656;</span>Inherit / Class Descriptions</div>
+          <div class="desc-toggle" id="descToggle"><span class="desc-caret"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron-right"></use></svg></span>Inherit / Class Descriptions</div>
           <div class="desc-body" id="descBody"></div>
         </div>
       </div>
@@ -669,7 +747,7 @@
     <div class="modal-head">
       <span class="modal-title" style="margin:0">Browse assets</span>
       <span class="muted" id="amFor" style="font-family:Consolas,'Courier New',monospace"></span>
-      <div style="margin-left:auto"><button class="btn icon" id="amClose" title="Close (Esc)">&#10005;</button></div>
+      <div style="margin-left:auto"><button class="btn icon" id="amClose" title="Close (Esc)" aria-label="Close asset browser"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-x"></use></svg></button></div>
     </div>
     <div class="ab-grid" id="abModalHost"></div>
     <div class="modal-foot">
@@ -855,6 +933,21 @@
 
   var PREVIEW = !(window.chrome && window.chrome.webview);
   function post(o) { if (!PREVIEW) { window.chrome.webview.postMessage(o); return; } previewHandle(o); }
+  function iconSvg(name) {
+    return '<svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-' + name + '"></use></svg>';
+  }
+  function setIcon(node, name) {
+    var use = node && node.querySelector('use');
+    if (use) use.setAttribute('href', '#icon-' + name);
+  }
+  var windowMaximized = false;
+  function renderWindowState(maximized) {
+    windowMaximized = !!maximized;
+    var btn = document.getElementById('winMax');
+    setIcon(btn, windowMaximized ? 'copy' : 'square');
+    btn.title = windowMaximized ? 'Restore' : 'Maximize';
+    btn.setAttribute('aria-label', btn.title);
+  }
   function configGet(key) { post({cmd:'configGet', key:key}); }
   function configSet(key, value) { post({cmd:'configSet', key:key, valueJson:JSON.stringify(value)}); }
   function entityModeValid(mode) {
@@ -1583,7 +1676,9 @@
     }
     else if (o.cmd === 'selectInEditor') { /* no 3D editor in browser preview */ }
     else if (o.cmd === 'camLock' || o.cmd === 'camSet') { /* no editor in browser preview */ }
-    else if (o.cmd && o.cmd.indexOf('win') === 0) { /* window controls: no-op in browser preview */ }
+    else if (o.cmd === 'winState') { onMessage({kind:'windowState', maximized:windowMaximized}); }
+    else if (o.cmd === 'winMax') { onMessage({kind:'windowState', maximized:!windowMaximized}); }
+    else if (o.cmd === 'winMin' || o.cmd === 'winDrag' || o.cmd === 'winResize') { /* no native window in preview */ }
   }
   function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
   function selCount() { var c = 0; for (var k in selectedEids) if (selectedEids[k]) c++; return c; }
@@ -2060,7 +2155,7 @@
       var d = diags[i];
       if (d.sev === 'err') errs++; else warns++;
       h += '<div class="prob" data-start="' + d.tok.start + '" data-end="' + d.tok.end + '">'
-         + '<span class="sev ' + d.sev + '">' + (d.sev === 'err' ? '&#9888;' : '&#9432;') + '</span>'
+         + '<span class="sev ' + d.sev + '">' + iconSvg(d.sev === 'err' ? 'triangle-alert' : 'circle-info') + '</span>'
          + '<span class="loc">Ln ' + (d.tok.line + 1) + '</span><span>' + esc(d.msg) + '</span></div>';
     }
     bar.innerHTML = h;
@@ -2562,7 +2657,7 @@
       return '<div class="ev-arg-row"><label>' + label + '</label>'
            + '<div class="combo ev-arg-combo" data-resclass="' + esc(assetResKey) + '">'
            +   '<input type="text" class="ev-arg-input" data-argidx="' + argIdx + '" data-assetkey="' + esc(asset.commitKey) + '" autocomplete="off" value="' + esc(assetDisp) + '">'
-           +   '<button type="button" class="combo-arrow">&#9662;</button><div class="combo-list"></div>'
+           +   '<button type="button" class="combo-arrow" aria-label="Show options">' + iconSvg('chevron-down') + '</button><div class="combo-list"></div>'
            + '</div></div>';
     }
     if (kind === 'bool') {
@@ -2584,7 +2679,7 @@
       return '<div class="ev-arg-row"><label>' + label + '</label>'
            + '<div class="combo ev-arg-combo" data-resclass="' + esc(declKey) + '">'
            +   '<input type="text" class="ev-arg-input" data-argidx="' + argIdx + '" data-declkey="' + esc(declKey) + '" autocomplete="off" value="' + esc(String(declVal)) + '">'
-           +   '<button type="button" class="combo-arrow">&#9662;</button><div class="combo-list"></div>'
+           +   '<button type="button" class="combo-arrow" aria-label="Show options">' + iconSvg('chevron-down') + '</button><div class="combo-list"></div>'
            + '</div></div>';
     }
     if (kind === 'enum') {
@@ -2596,7 +2691,7 @@
       return '<div class="ev-arg-row"><label>' + label + '</label>'
            + '<div class="combo ev-arg-combo" data-resclass="' + esc(enumType) + '">'
            +   '<input type="text" class="ev-arg-input" data-argidx="' + argIdx + '" autocomplete="off" value="' + esc(String(enumVal)) + '">'
-           +   '<button type="button" class="combo-arrow">&#9662;</button><div class="combo-list"></div>'
+           +   '<button type="button" class="combo-arrow" aria-label="Show options">' + iconSvg('chevron-down') + '</button><div class="combo-list"></div>'
            + '</div></div>';
     }
     if (kind === 'entity') {
@@ -2618,7 +2713,7 @@
       return '<div class="ev-arg-row"><label>' + label + '</label>'
            + '<div class="combo ev-arg-combo" data-resclass="entity">'
            +   '<input type="text" class="ev-arg-input" data-argidx="' + argIdx + '" autocomplete="off" value="' + esc(entDisp) + '">'
-           +   '<button type="button" class="combo-arrow">&#9662;</button><div class="combo-list"></div>'
+           +   '<button type="button" class="combo-arrow" aria-label="Show options">' + iconSvg('chevron-down') + '</button><div class="combo-list"></div>'
            + '</div></div>';
     }
     if (kind === 'vecn') {
@@ -3010,9 +3105,9 @@
     for (var i = 0; i < tlModel.tabs.length; i++) {
       var cls = 'tl-inner-tab' + (i === tlModel.active ? ' active' : '');
       html += '<div class="' + cls + '" data-tlidx="' + i + '">Item ' + i
-            + '<span class="tl-tab-del" title="Remove this entity event list">&#10005;</span></div>';
+            + '<span class="tl-tab-del" title="Remove this entity event list">' + iconSvg('x') + '</span></div>';
     }
-    html += '<div class="tl-inner-tab tl-add" title="Add an entity-event list">+</div>';
+    html += '<div class="tl-inner-tab tl-add" title="Add an entity-event list">' + iconSvg('plus') + '</div>';
     tabsEl.innerHTML = html;
   }
   // The OG "Runs on" entity-picker (FUN_180008180, live-decompiled from the original snaphakui.dll for
@@ -3041,7 +3136,7 @@
     var entityText = tab.entity ? tlEntityLabel(tab.entity) : '';
 
     var h = '<div class="entity-picker">'
-       + '<div class="combo grow"><input type="text" id="tlRunsOn" value="' + esc(entityText) + '" placeholder="(no entity)" autocomplete="off"><button type="button" class="combo-arrow">&#9662;</button><div class="combo-list"></div></div>'
+       + '<div class="combo grow"><input type="text" id="tlRunsOn" value="' + esc(entityText) + '" placeholder="(no entity)" autocomplete="off"><button type="button" class="combo-arrow" aria-label="Show entity options">' + iconSvg('chevron-down') + '</button><div class="combo-list"></div></div>'
        + '<div class="entity-picker-opts">'
        +   '<button type="button" class="btn" id="tlUseSelection" title="Set Runs on to the entity currently selected in the SnapMap editor (must be exactly one)">Use current selection</button>'
        + '</div>'
@@ -3065,8 +3160,8 @@
         h += '<div class="event-row" data-evidx="' + j + '">'
            + '<div class="ev-top">'
            +   '<label>Time</label><input type="text" class="ev-time" value="' + esc(String(ev.time)) + '">'
-           +   '<div class="combo"><input type="text" class="ev-eventdef" value="' + esc(ev.eventDef) + '" autocomplete="off" placeholder="(pick an event)"><button type="button" class="combo-arrow">&#9662;</button><div class="combo-list"></div></div>'
-           +   '<div class="ev-del" title="Remove event call">&#10005;</div>'
+           +   '<div class="combo"><input type="text" class="ev-eventdef" value="' + esc(ev.eventDef) + '" autocomplete="off" placeholder="(pick an event)"><button type="button" class="combo-arrow" aria-label="Show event options">' + iconSvg('chevron-down') + '</button><div class="combo-list"></div></div>'
+           +   '<div class="ev-del" title="Remove event call">' + iconSvg('x') + '</div>'
            + '</div>';
         if (ev.args.length === 0) {
           h += '<div class="ev-args-list muted">no parameters</div>';
@@ -3087,7 +3182,7 @@
         if (ev.eventDef) {
           var descKey = tlModel.active + ':' + j;
           h += '<div class="desc-panel' + (tlDescOpen[descKey] ? ' open' : '') + '" data-desckey="' + esc(descKey) + '">'
-             +   '<div class="desc-toggle"><span class="desc-caret">&#9656;</span>What does this event do?</div>'
+             +   '<div class="desc-toggle"><span class="desc-caret">' + iconSvg('chevron-right') + '</span>What does this event do?</div>'
              +   '<div class="desc-body">' + tlEventDescHtml(ev.eventDef) + '</div>'
              + '</div>';
         }
@@ -3333,7 +3428,9 @@
 
   // ---- messages from native ----
   function onMessage(d) {
-    if (d.kind === 'configValue') {
+    if (d.kind === 'windowState') {
+      renderWindowState(d.maximized);
+    } else if (d.kind === 'configValue') {
       if (d.key === 'theme' && d.result === 1) {
         try {
           var savedTheme = JSON.parse(d.valueJson);
@@ -3658,7 +3755,7 @@
       if (filter && items.length === 0) continue;
       anyShown = true;
       h += '<div class="pf-folder pf-open" data-folder-name="' + esc(folder.name) + '">'
-         + '<div class="pf-folder-head"><span class="pf-caret">&#9662;</span> <span class="pf-fname">' + esc(folder.name) + '</span><span class="pf-folder-del" title="Delete folder">&#10005;</span></div>'
+         + '<div class="pf-folder-head"><span class="pf-caret">' + iconSvg('chevron-down') + '</span> <span class="pf-fname">' + esc(folder.name) + '</span><span class="pf-folder-del" title="Delete folder">' + iconSvg('x') + '</span></div>'
          + '<div class="pf-folder-body">';
       for (var j = 0; j < items.length; j++) h += '<div class="pf-item" draggable="true" data-folder="' + esc(folder.name) + '">' + esc(items[j]) + '</div>';
       h += '</div></div>';
@@ -3817,25 +3914,29 @@
     col.classList.toggle('focus-mode', on);
     btn.classList.toggle('active', on);
     btn.title = on ? 'Exit focus mode (Esc)' : 'Focus mode (Esc to exit)';
+    btn.setAttribute('aria-label', on ? 'Exit focus mode' : 'Enter focus mode');
+    setIcon(btn, on ? 'minimize-2' : 'maximize-2');
     // Save/Revert/dirty-note live in .panel-head, which focus-mode's fixed overlay covers -- move the SAME
     // node (not a clone) into .focus-head for the duration so they stay usable, then move it back on exit.
     // updateDirty()/doSave()/doRevert() already target these elements by id, so nothing else needs to change.
     var dest = document.getElementById(on ? 'focusHead' : 'entityStateHead');
     dest.appendChild(document.getElementById('panelActions'));
-    // Match declFocusBtn's own compact "icon" look exactly (reuses its CSS, not a new style to keep in
-    // sync), same as declFocusBtn itself: swap the button's REAL textContent to a plain glyph (not a CSS
-    // ::before hack -- that rendered inconsistently) + set a title so the icon is still explained on hover.
-    // Both restored to their normal word + no title on exit.
+    // Match declFocusBtn's compact icon-button look while the normal panel head is covered. These are the
+    // same action nodes, with the shared SVG sprite inserted only for focus mode, then their normal labels
+    // restored when they return to the panel head.
     var revertBtn = document.getElementById('revertBtn'), saveBtn = document.getElementById('saveBtn');
     revertBtn.classList.toggle('icon', on);
     saveBtn.classList.toggle('icon', on);
-    // U+21A9/U+2913 (JS escapes, not raw UTF-8 chars) to match this file's existing HTML-entity-icon
-    // convention and stay encoding-safe -- mockup.html gets embedded into a generated C++ header at build time.
-    revertBtn.textContent = on ? '\u21A9' : 'Revert';       // hooked back-arrow -- deliberately NOT the circular-loop shape
-                                                             // refreshBtn uses (Entities panel), which reads too similar at icon size
-    saveBtn.textContent   = on ? '\u2913' : 'Save to Decl'; // downwards-arrow-to-bar -- save/commit
-    if (on) { revertBtn.title = 'Revert'; saveBtn.title = 'Save to Decl'; }
-    else    { revertBtn.removeAttribute('title'); saveBtn.removeAttribute('title'); }
+    if (on) {
+      revertBtn.innerHTML = iconSvg('undo-2');
+      saveBtn.innerHTML = iconSvg('save');
+      revertBtn.title = 'Revert'; saveBtn.title = 'Save to Decl';
+      revertBtn.setAttribute('aria-label', 'Revert'); saveBtn.setAttribute('aria-label', 'Save to Decl');
+    } else {
+      revertBtn.textContent = 'Revert'; saveBtn.textContent = 'Save to Decl';
+      revertBtn.removeAttribute('title'); saveBtn.removeAttribute('title');
+      revertBtn.removeAttribute('aria-label'); saveBtn.removeAttribute('aria-label');
+    }
     refreshDeclScroll();
   }
   document.getElementById('declFocusBtn').addEventListener('click', function(){
@@ -3932,9 +4033,17 @@
     }
   })();
 
-  // frameless window controls: minimize / maximize, drag on the menu bar, resize on the edge handles.
-  document.getElementById('winMin').addEventListener('click', function(){ post({cmd:'winMin'}); });
-  document.getElementById('winMax').addEventListener('click', function(){ post({cmd:'winMax'}); });
+  // Frameless window controls: minimize / maximize, drag on the menu bar, resize on the edge handles.
+  // Native reports maximize state so the icon stays correct after Aero Snap and taskbar restores too.
+  var winMinEl = document.getElementById('winMin'), winMaxEl = document.getElementById('winMax');
+  winMinEl.addEventListener('click', function(){ post({cmd:'winMin'}); });
+  winMaxEl.addEventListener('click', function(){ post({cmd:'winMax'}); });
+  [winMinEl, winMaxEl].forEach(function(el){
+    el.addEventListener('keydown', function(e){
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); }
+    });
+  });
+  post({cmd:'winState'});
   var menubarEl = document.querySelector('.menubar');
   function barInteractive(t){ return t.closest('.theme-toggle, .win-controls, button, input'); }
   menubarEl.addEventListener('mousedown', function(e){ if (e.button === 0 && !barInteractive(e.target)) post({cmd:'winDrag'}); });
@@ -5376,7 +5485,7 @@
     var pn = abPins.length;
     var pinned = '<div class="entity-item' + (m.type === 'pinned' ? ' selected' : '') + '" data-type="pinned"'
                + ' title="Assets you pinned with the star beside their name. Any type, kept across restarts.">'
-               + '<span class="nm">' + String.fromCharCode(0x2605) + ' Pinned</span>'
+               + '<span class="nm">' + iconSvg('star') + 'Pinned</span>'
                + '<span class="n">' + (pn ? pn.toLocaleString() : '-') + '</span></div>';
     m.el('rail').innerHTML = pinned
                            + '<div class="rail-head">Placeable</div>' + place
@@ -5423,7 +5532,7 @@
     if (!node) { el.innerHTML = '<div class="list-empty">That folder is gone.</div>'; return; }
     var out = '';
     if (m.dir) out += '<div class="entity-item" data-up="1"><div class="ab-row">'
-                    + '<span class="tw">&#8593;</span><span class="nm">..</span></div></div>';
+                    + '<span class="tw">' + iconSvg('arrow-up') + '</span><span class="nm">..</span></div></div>';
     for (var d = 0; d < node.dirKeys.length; d++) {
       var name = node.dirKeys[d];
       out += abRow(m, name, (m.dir ? m.dir + '/' : '') + name, true, node.dirs[name].n);
@@ -5620,28 +5729,19 @@
     /* LEFT of the name, in its own fixed-width gutter beside the folder twisty -- not floated right
      * next to Copy, where it made every row look lopsided and put a state indicator in among the
      * actions. A pinned row's flag reads down the left edge like a margin mark, which is what a
-     * shortlist wants.
-     *
-     * Filled U+2605 / hollow U+2606 -- the favourites idiom, and it doubles up with the gutter's own
-     * colour and opacity states (invisible at rest, faint on hover, solid accent when pinned) so the
-     * pinned/unpinned distinction survives even where colour is hard to judge. Both are BMP, so
-     * fromCharCode is safe: an ASTRAL glyph (a real pushpin, U+1F588) would need its surrogate pair,
-     * because fromCharCode truncates to 16 bits and would silently yield a private-use codepoint
-     * that renders as tofu -- a failure indistinguishable from the font simply lacking the glyph.
-     *
-     * Built with fromCharCode rather than typed literally to keep this file pure ASCII (see the
-     * note at the top of the file -- the build pipeline flattens any non-ASCII byte to '?'). */
+     * shortlist wants. Fill the shared Lucide star only for pinned rows; opacity and accent color
+     * provide the same quick state scan without relying on font glyph availability. */
     var pinBtn = isDir ? '<span class="ab-pin-gap"></span>'
       : '<button class="ab-pin' + (pinned ? ' on' : '') + '" data-pin="' + abEsc(path) + '"'
       + ' data-pintype="' + abEsc(ptype) + '"'
-      + ' title="' + (pinned ? 'Unpin this asset' : 'Pin this asset to the Pinned list') + '">'
-      + String.fromCharCode(pinned ? 0x2605 : 0x2606) + '</button>';
+      + ' title="' + (pinned ? 'Unpin this asset' : 'Pin this asset to the Pinned list') + '"'
+      + ' aria-label="' + (pinned ? 'Unpin this asset' : 'Pin this asset') + '">' + iconSvg('star') + '</button>';
     return '<div class="entity-item' + sel + '" data-path="' + abEsc(path) + '"' + (isDir ? ' data-dir="1"' : '')
-         + '><div class="ab-row"><span class="tw">' + (isDir ? '&#9656;' : '') + '</span>'
+         + '><div class="ab-row"><span class="tw">' + (isDir ? iconSvg('chevron-right') : '') + '</span>'
          + pinBtn
          + '<span class="nm' + (isDir ? '' : ' leaf') + '">' + abEsc(label) + '</span>'
          + (isDir ? '<span class="cnt">' + count.toLocaleString() + '</span>'
-                  : '<button class="cp" data-copy="' + abEsc(path) + '" title="Copy the full path">copy</button>')
+                  : '<button class="cp" data-copy="' + abEsc(path) + '" title="Copy the full path" aria-label="Copy the full path">' + iconSvg('copy') + '</button>')
          + '</div></div>';
   }
 
@@ -5669,7 +5769,7 @@
       h = '<div class="ab-audition' + (on ? ' playing' : '') + '">'
         + '<button class="btn ab-play" data-ab-audition="1" title="'
         +   (on ? 'Stop the preview' : 'Play this sound through the 3D editor') + '">'
-        +   (on ? '&#9632;' : '&#9654;') + '</button>'
+        +   iconSvg(on ? 'square' : 'play') + '</button>'
         + '<div class="ab-audition-note">' + (on ? 'Playing' : 'Preview this sound') + '</div>'
         + '</div>';
     } else {
@@ -6764,7 +6864,7 @@
   if (newFolderBtn) newFolderBtn.addEventListener('click', function(){
     if (!prefabTree) return;
     var f = document.createElement('div'); f.className = 'pf-folder pf-open';
-    f.innerHTML = '<div class="pf-folder-head"><span class="pf-caret">&#9662;</span> <input class="pf-folder-name" value="New Folder"><span class="pf-folder-del" title="Delete folder">&#10005;</span></div><div class="pf-folder-body"></div>';
+    f.innerHTML = '<div class="pf-folder-head"><span class="pf-caret">' + iconSvg('chevron-down') + '</span> <input class="pf-folder-name" value="New Folder"><span class="pf-folder-del" title="Delete folder">' + iconSvg('x') + '</span></div><div class="pf-folder-body"></div>';
     prefabTree.appendChild(f);
     var inp = f.querySelector('.pf-folder-name');
     var done = false;
