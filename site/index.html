@@ -356,13 +356,12 @@
       <a href="https://discord.gg/QEcFfxSF24" rel="noopener">Discord</a>
       <a href="https://github.com/doom-snapmap/snapmap-plus/blob/main/LICENSE">MIT License</a>
       <a href="privacy.html">Privacy policy</a>
-      <a href="#code-signing">Code signing policy</a>
+      <a href="#release-provenance">Release provenance</a>
     </div>
-    <div id="code-signing">
-      <strong>Code signing policy.</strong> Free code signing provided by SignPath.io, certificate by SignPath Foundation.
-      Snapmap+'s Windows binaries &mdash; the <code>snapmap-plus.exe</code> installer and the two overlay DLLs &mdash; are
-      code-signed with a certificate held by SignPath Foundation, applied automatically in the GitHub Actions
-      release pipeline. Every release is built from source, with provenance verifiable via
+    <div id="release-provenance">
+      <strong>Release provenance.</strong> Snapmap+'s Windows binaries &mdash; the <code>snapmap-plus.exe</code> installer
+      and the two overlay DLLs &mdash; are currently unsigned. Every release is built from source in GitHub Actions,
+      with provenance verifiable via
       <code>gh attestation verify --repo doom-snapmap/snapmap-plus</code>.
     </div>
     <div>
