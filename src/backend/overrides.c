@@ -33,6 +33,7 @@
 #pragma comment(lib, "shell32.lib")   /* SHGetFolderPathA */
 #include "overrides.h"
 #include "backend_log.h"
+#include "decl_text.h"
 #include "user_overrides.h"
 #include "overrides_baked.h"        /* the built-in "*Custom"-tab default decls (Timeline + Unknown) */
 
@@ -293,6 +294,13 @@ static void resolve_root(char *out, size_t cap)
     else default_root(out, cap);
 }
 
+int sh_overrides_get_root(char *out, size_t cap)
+{
+    if (!out || cap == 0) return 0;
+    resolve_root(out, cap);
+    return out[0] != '\0';
+}
+
 /* Build the on-disk override path for engine resource `name` into `out`. Returns 1 if a path was built
  * (always, for a non-empty name). The selection mirrors OG FUN_18000b110 EXACTLY (see the block comment
  * above): the shader_includes branch is the RARE exception for ".inc"-suffixed shader-include names; every
@@ -382,28 +390,6 @@ static const ov_baked_decl_t *find_baked(const char *name)
     return NULL;
 }
 
-/* Minimal decl well-formedness: has content; braces balance (never negative, ends at 0) and quotes
- * pair up, counted OUTSIDE quotes and outside // and block comments (the decl grammar allows both).
- * This is a truncation/mangling tripwire, NOT a semantic validator -- a structurally sound decl with
- * bad values still serves (the user's folder is the user's). */
-static int decl_well_formed(const unsigned char *buf, size_t len)
-{
-    long depth = 0;
-    int  in_quote = 0, in_line_comment = 0, in_block_comment = 0, seen_brace = 0;
-    for (size_t i = 0; i < len; i++) {
-        char c = (char)buf[i];
-        if (in_line_comment)  { if (c == '\n') in_line_comment = 0;                       continue; }
-        if (in_block_comment) { if (c == '*' && i + 1 < len && buf[i+1] == '/') { in_block_comment = 0; i++; } continue; }
-        if (in_quote)         { if (c == '"' || c == '\n') in_quote = 0;                  continue; }
-        if (c == '"')  { in_quote = 1; continue; }
-        if (c == '/' && i + 1 < len && buf[i+1] == '/') { in_line_comment = 1;  i++; continue; }
-        if (c == '/' && i + 1 < len && buf[i+1] == '*') { in_block_comment = 1; i++; continue; }
-        if (c == '{') { depth++; seen_brace = 1; }
-        else if (c == '}') { if (--depth < 0) return 0; }
-    }
-    return seen_brace && depth == 0 && !in_quote;
-}
-
 /* Read a whole file into a heap buffer (cap 8 MiB -- decls are KB-scale; a bigger file is served
  * unvalidated as a plain stream rather than slurped). NULL on absent/oversize/failure. */
 #define OV_SLURP_CAP (8u * 1024u * 1024u)
@@ -440,7 +426,7 @@ static ov_stream *open_user_for_baked_name(const char *name, int *malformed)
     unsigned char *buf = read_all_file(path, &len);
     if (!buf) return try_open_override(name);            /* unusual size/alloc -> plain file stream */
 
-    if (!decl_well_formed(buf, (size_t)len)) {
+    if (!sh_decl_text_well_formed(buf, (size_t)len)) {
         HeapFree(GetProcessHeap(), 0, buf);
         *malformed = 1;
         return NULL;
@@ -601,7 +587,7 @@ static void audit_walk(const char *dir, const char *rel, int depth, int *count, 
             int bad = 0;
             long long len = 0;
             unsigned char *buf = read_all_file(sub, &len);
-            if (buf) { bad = !decl_well_formed(buf, (size_t)len); HeapFree(GetProcessHeap(), 0, buf); }
+            if (buf) { bad = !sh_decl_text_well_formed(buf, (size_t)len); HeapFree(GetProcessHeap(), 0, buf); }
             if (bad) (*warned)++;
             if (*named < OV_AUDIT_MAX_NAMED || bad) {
                 char msg[MAX_PATH + 96];

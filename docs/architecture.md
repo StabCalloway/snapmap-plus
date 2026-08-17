@@ -161,11 +161,43 @@ generate, parse, or replace it. `sh_config_init` runs after the common per-user 
 and creates this version-1 document when the file is absent:
 
 ```text
-config init -> immutable user-overrides snapshot -> resource-hook install
+config init -> immutable user-overrides snapshot -> resource-shadow install
+            -> command-system install -> decl-server snapshot
+            -> one private main-thread registration command
 ```
 
 The snapshot makes the user-file layer stable for that DOOM process; the setting is changed for a later
 launch, not as a live resource-loader switch.
+
+## Existing shadows versus genuinely new decls
+
+The two mechanisms deliberately share one user setting and one data root, but solve different engine
+problems:
+
+| Path | Trigger | Result |
+|---|---|---|
+| Ordinary file shadow | DOOM requests an already-registered source path | The resource loader receives the user's bytes instead of the packaged bytes. |
+| Dynamic decl server | Startup enumerates `overrides/generated/decls/<type>/...*.decl` | An absent logical identity is inserted into DOOM's live decl registry. |
+
+The dynamic path is not a second resource hook. Discovery and bounded structural validation happen on the
+backend bootstrap thread, producing an immutable in-memory launch snapshot. Snapmap+ then registers one
+private engine command and queues it through `BufferCommandText`; DOOM drains it at its own command-exec
+point on the main thread. The handler resolves the short decl type through the registry's `+0x58` virtual
+method and inserts missing identities through its native `+0x70` AddDeclFromText method. It calls the
+signature-resolved decl finder before and after insertion, so existing identities are classified as
+`SHADOWED` and newly published ones as `REGISTERED`.
+
+The registry anchor, type lookup, add-from-text method, and decl finder are independently signature-resolved.
+The anchor must be a clean scan because Snapmap+ decodes its RIP-relative registry slot; the two live vtable
+entries must exactly match their resolved method addresses. Any missing or ambiguous boundary refuses the
+service before mutation. A per-file engine exception aborts the remaining batch rather than continuing from
+uncertain registry state.
+
+Files are case-insensitively collision-checked, capped at 512 files, 1 MiB each, and 16 MiB total, and reparse
+points, traversal, malformed paths, embedded NULs, and unbalanced text are refused. DOOM's parser remains the
+semantic authority. The service intentionally has no watcher, refresh, retry, or unload path: changing a decl
+requires a cold restart. It registers textual decl identities only; it does not make referenced binary assets
+portable or distribute dependencies with a map.
 
 ```json
 {

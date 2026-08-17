@@ -179,20 +179,35 @@ deleted file through the same settings service. The generic backend↔frontend s
 frontend control for this setting. Unknown values are preserved when a supported-schema file is rewritten.
 See [`docs/architecture.md`](docs/architecture.md) for validation, recovery, and I/O-failure behavior.
 
-## Overrides (runtime)
+## Overrides and new decls (runtime)
 
-At runtime the tool reads per-user **override decls** from `%LOCALAPPDATA%\snapmap-plus\overrides\` (a
-file-shadow over the engine's resource loader — e.g. to make extra editor entities placeable). Resolution is
-three-layer: **your file wins while the player-file layer is enabled**, then the tool's few built-in default
-decls (the "*Custom" palette tab — served from memory, never written to your folder; delete your file at one
-of those names to get the default back), then the game's own packaged resource. A broken override set can be bisected by setting
-`sh_user_overrides 0` (or restored with `sh_user_overrides 1`). The command saves
-`overrides.user_enabled` only when persistence succeeds and requires a DOOM restart; it changes only the
-player-file first layer, so built-in defaults and the game's packaged resources remain available. If it
-cannot save, the console says so, this launch remains unchanged, and no next-launch change is guaranteed.
-Run `sh_user_overrides` with no argument to see this launch's state and either the saved next-launch state
-or a volatile value that is not confirmed saved. The backend log lists your active overrides at startup.
-Runtime logs go to
+Snapmap+ has two complementary user-decl paths under `%LOCALAPPDATA%\snapmap-plus\overrides\`:
+
+- **Existing decl identity:** the ordinary resource-loader file shadow remains unchanged. Your file wins
+  while the user layer is enabled, then Snapmap+'s few built-in defaults (the "*Custom" palette tab, served
+  from memory), then DOOM's packaged resource.
+- **Genuinely new decl identity:** put a `.decl` below `generated\decls\<type>\`. At cold start the decl server
+  derives the engine type from the first directory and the logical name from the remaining path, then uses
+  DOOM's native dynamic-decl API to register an identity that did not exist in the packaged indexes. For
+  example, this file:
+
+  ```text
+  overrides\generated\decls\actormodifier\actormodifier\demon\cacodemon.decl
+  ```
+
+  registers type `actormodifier` with logical name `actormodifier/demon/cacodemon`. If that identity already
+  exists, the decl server does not replace it; the file stays on the ordinary shadow path instead.
+
+Discovery is one immutable snapshot per DOOM process. There is no refresh, watcher, hot reload, or unload;
+restart DOOM after adding or changing files. The backend log records every candidate as `REGISTERED`,
+`SHADOWED`, or `REFUSED`. This creates text decl identities only: referenced models, sounds, images, and other
+binary resources must already be available through a separate resource mechanism.
+
+A broken user set can be bisected with `sh_user_overrides 0` (restore with `sh_user_overrides 1`). The command
+saves `overrides.user_enabled` only when persistence succeeds and requires a DOOM restart; it disables both
+the user file-shadow and user new-decl registration for the next launch, while built-in defaults and packaged
+resources remain available. Run it without an argument to inspect this launch and the saved next-launch
+state. Runtime logs go to
 `<DOOM>\snapmap-plus\logs\`. (Content from the original SnapHak's / older releases' `%USERPROFILE%\snaphak`
 folder is copied forward on install; a legacy root-level `snaphak_logs\` is folded in too.)
 

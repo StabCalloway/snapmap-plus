@@ -27,6 +27,7 @@
 #include "../fault_shield/mapload_guards.h"   /* the two map-load / spawn game-defect guards */
 #include "strids.h"
 #include "overrides.h"
+#include "decl_server.h"
 #include "commands.h"
 #include "cvars.h"
 #include "entity.h"
@@ -88,7 +89,9 @@ static void resolve_doom(void)
  * mirror every <data-root>\<sub> path the backend builds. */
 static void ensure_user_dirs(void)
 {
-    static const char *subs[] = { "", "\\strings", "\\overrides", "\\prefabs" };
+    static const char *subs[] = { "", "\\strings", "\\overrides",
+                                  "\\overrides\\generated", "\\overrides\\generated\\decls",
+                                  "\\prefabs" };
     char base[MAX_PATH], path[MAX_PATH];
     int i;
     if (FAILED(SHGetFolderPathA(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, base))) {
@@ -104,7 +107,7 @@ static void ensure_user_dirs(void)
             backend_log(line);
         }
     }
-    backend_log("snapmap-plus user-data dirs ensured (root + strings/overrides/prefabs)");
+    backend_log("snapmap-plus user-data dirs ensured (root + strings/overrides/generated/decls + prefabs)");
 }
 
 static DWORD WINAPI bootstrap_thread(LPVOID p)
@@ -328,6 +331,15 @@ static DWORD WINAPI bootstrap_thread(LPVOID p)
         void *printf_d = (void *)sig_addr_by_name(results, db, "Printf");
         void *cmdsys   = sh_resolve_cmdsys(results, db, g_doom_base);
         sh_commands_install(add_cmd, cmdsys, printf_d, get_decls, g_doom_base);
+
+        /* The DYNAMIC DECL SERVER complements the file-shadow installed above. It snapshots only
+         * overrides/generated/decls, then registers a private command and BufferCommandTexts it so the
+         * engine's native type lookup + AddDeclFromText calls run at the command-exec point on DOOM's
+         * main thread. Existing identities remain ordinary SHADOWED overrides; absent identities become
+         * genuine REGISTERED decls. One immutable launch snapshot, no watcher/retry/hot reload. AFTER
+         * sh_commands_install so AddCommand/cmdSystem are proven live and the command-unlock detour has
+         * already established the normal registration ABI. See decl_server.c. */
+        sh_decl_server_install(results, db, g_doom_base, cmdsys);
 
         /* backend touch: AFTER `sh` is registered (sh_commands above registers the "sh" command),
          * create the shared UI-interface object + LoadLibraryA(".\\snapmap-plus\\snapmap-plus-ui.dll") +

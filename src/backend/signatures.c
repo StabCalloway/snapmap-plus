@@ -361,6 +361,37 @@ const sig_entry BACKEND_ENGINE_SIGNATURES[] = {
       "48 89 5C 24 08 57 48 83 EC 20 48 8B 1D ?? ?? ?? ?? 48 8B F9 48 85 DB 74 ?? "
       "0F 1F 80 00 00 00 00 48 8B 4B 10",
       0x1800D20u },
+    /* --- dynamic decl server ----------------------------------------------------------------------
+     * DOOM already owns a generic dynamic-decl API. The registry object's vtable exposes type lookup at
+     * +0x58 and AddDeclFromText at +0x70; the latter is the exact route the engine uses to synthesize
+     * runtime materials. Snapmap+ resolves and cross-checks every boundary before calling it:
+     *
+     *   DeclRegistryAnchor  -- a small engine helper whose +0x10 MOV RCX,[rip+registrySlot] gives the
+     *                          process registry object without a hardcoded .data RVA. The decoder requires
+     *                          a CLEAN resolve because it reads inside the prologue.
+     *   DeclTypeByName      -- registry vtable +0x58, short type name -> decl type manager.
+     *   DeclAddFromText     -- registry vtable +0x70, add logical name + source name + body text.
+     *   DeclFind            -- type manager + logical name + makeDefault byte -> decl or NULL; used both
+     *                          to preserve existing identities as SHADOWED and to verify publication.
+     *
+     * Each pattern is unique in the pinned unpacked image. sig_test additionally proves the vtable method
+     * RVAs; decl_server.c refuses the whole service if the live vtable does not equal these resolves. */
+    { "DeclRegistryAnchor",
+      "40 53 48 83 EC 30 48 8B D9 4C 8D 05 ?? ?? ?? ?? 48 8B 0D ?? ?? ?? ?? "
+      "48 8B D3 48 8B 01 FF 90 C0 00 00 00",
+      0x184E1D0u },
+    { "DeclTypeByName",
+      "48 89 6C 24 18 56 48 83 EC 20 48 8B EA 48 8B F1 48 85 D2 74 ?? 80 3A 00 74 ?? "
+      "48 89 5C 24 30 33 DB 48 89 7C 24 38 39 59 10",
+      0x17B43B0u },
+    { "DeclAddFromText",
+      "40 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 C8 DC FF FF B8 38 24 00 00 "
+      "E8 ?? ?? ?? ?? 48 2B E0 48 C7 44 24 28 FE FF FF FF",
+      0x17B2C00u },
+    { "DeclFind",
+      "40 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 F0 FD FF FF 48 81 EC 10 03 00 00 "
+      "48 C7 44 24 68 FE FF FF FF 48 89 9C 24 68 03 00 00",
+      0x17B36F0u },
     { "GameMgrLea",        /* thin RET-leaf bool getter (0xb10870) whose prologue loads the
                             * gameMgr global via MOV RAX,[rip+gameMgr] (48 8B 05, the FIRST decode-target
                             * opcode, byte offset 0), then CMP [RAX+0xA54A0],0 / SETZ. Decode = rip_next +

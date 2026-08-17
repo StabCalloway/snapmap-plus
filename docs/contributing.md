@@ -135,7 +135,7 @@ cd ..
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 ```
 
-By default this compiles and runs 23 **self-contained native tests** (no game needed):
+By default this compiles and runs 27 **self-contained native tests** (no game needed):
 
 - **`shield_format_test`** — the fault-record string formatter (pure logic).
 - **`hook_test`** — the inline-detour installer, exercised on a hand-laid scratch stub.
@@ -149,6 +149,8 @@ By default this compiles and runs 23 **self-contained native tests** (no game ne
   deletion reset, external/process writers, and the registered service.
 - **`user_overrides_test`** — immutable launch snapshots, persistence reporting, and marker independence.
 - **`user_overrides_contract_test`** — startup, command, cvar, and loader source-wiring contracts.
+- **`decl_server_test`** — path-derived decl identities and shared bounded text validation.
+- **`decl_server_contract_test`** — startup ordering, signature pins, one-shot main-thread wiring, and fail-closed guards.
 - **`config_message_test`** — bounded raw WebView config-message extraction before UTF-8 conversion.
 - **`theme_bootstrap_test`** — pre-navigation root-class seeding for a saved dark theme.
 - **`theme_contract_test`** — the HTML config-message contract and PREVIEW-only browser storage.
@@ -202,7 +204,7 @@ A third test, `xinput_ordinal_test.c`, is a **runtime** cross-check of the XInpu
 a built DLL and calls its exports by ordinal. CI verifies that same invariant *statically* with `dumpbin` (the
 "XInput ordinal parity" step), so you normally don't need to run it by hand.
 
-CI runs the 23 self-contained native tests, three JavaScript contract tests, and the installer tests on every PR; the DOOM-image tests are local-only
+CI runs the 27 self-contained native tests, four JavaScript contract tests, and the installer tests on every PR; the DOOM-image tests are local-only
 (CI has no game image).
 
 After the normal test run has built its executables, contributors with DOOM installed can also

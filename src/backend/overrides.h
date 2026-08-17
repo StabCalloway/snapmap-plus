@@ -62,6 +62,11 @@ int sh_overrides_install(void *ctor_fn, int ctor_status_ok);
  * %USERPROFILE%\snaphak). Pass NULL to reset to the default. Returns 1 if a path is set. */
 int sh_overrides_set_root(const char *path);
 
+/* Copy the effective data root into `out` (the configured test root, otherwise
+ * %LOCALAPPDATA%\snapmap-plus). Shared with the dynamic decl server so both
+ * override mechanisms always inspect the same tree. */
+int sh_overrides_get_root(char *out, size_t cap);
+
 /* How many times the shadow has FIRED (served an override file instead of the packaged resource).
  * Observability for the test harness. */
 unsigned long sh_overrides_shadow_count(void);
