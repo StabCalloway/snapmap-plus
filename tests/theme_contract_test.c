@@ -171,13 +171,24 @@ int main(int argc, char **argv)
     CHECK(strstr(html,
           "width: 100%; height: 100%; overflow: hidden;") != NULL);
     CHECK(strstr(html,
-          ".app { display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden;") != NULL);
+          ".app { --split-primary: 40%; display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden;") != NULL);
     CHECK(strstr(html,
           ".content { position: relative; flex: 1 1 0; display: flex; min-width: 0; min-height: 0; overflow: hidden;") != NULL);
-    CHECK(strstr(html, ".editor-col.focus-mode {") != NULL);
+    CHECK(strstr(html, ".editor-col.focus-mode { height: auto; }") != NULL);
+    CHECK(strstr(html, "position: absolute; inset: 14px; z-index: 1800;") == NULL);
     CHECK(strstr(html,
-          "position: absolute; inset: 14px; z-index: 1800;") != NULL);
-    CHECK(strstr(html, "position: fixed; inset: 14px;") == NULL);
+          "<div class=\"modal-overlay\" id=\"declFocusModal\" style=\"display:none;\" aria-hidden=\"true\">") != NULL);
+    CHECK(strstr(html,
+          ".modal.decl-focus-modal { width: min(1040px, 94vw); height: min(720px, 88vh);") != NULL);
+    CHECK(strstr(html,
+          "document.getElementById('declFocusHost').appendChild(col);") != NULL);
+    CHECK(strstr(html,
+          "declFocusAnchor.parentNode.insertBefore(col, declFocusAnchor);") != NULL);
+    CHECK(strstr(html,
+          "if (e.target === declFocusOverlay) setDeclFocus(false);") != NULL);
+    CHECK(strstr(html,
+          ".prob { display: flex; gap: 7px; padding: 1px 0; border-radius: 3px; cursor: pointer; }") != NULL);
+    CHECK(strstr(html, ".prob:hover") == NULL);
     CHECK(strstr(html,
           ".statusbar { display: grid; grid-template-columns: minmax(0, 1fr) auto;") != NULL);
     CHECK(strstr(html,
@@ -185,20 +196,34 @@ int main(int argc, char **argv)
     CHECK(strstr(html,
           ".panel-head { display: flex; align-items: center; gap: 8px; height: 40px; min-height: 40px;") != NULL);
     CHECK(strstr(html,
-          ".split-workspace { --split-primary: 40%; display: flex;") != NULL);
+          ".split-workspace { --pane-inline: 10px; display: flex;") != NULL);
     CHECK(strstr(html,
           ".primary-split > .left-pane { width: var(--split-primary); flex: 0 0 var(--split-primary);") != NULL);
+    CHECK(strstr(html,
+          ".split-workspace > .panel > .panel-body.list { padding-inline: var(--pane-inline); }") != NULL);
+    CHECK(strstr(html,
+          ".split-workspace > .panel > .panel-toolbar { position: relative; border-bottom-color: transparent; }") != NULL);
+    CHECK(strstr(html,
+          "content: \"\"; position: absolute; left: var(--pane-inline); right: var(--pane-inline); bottom: -1px;") != NULL);
+    CHECK(strstr(html,
+          ".split-workspace > .panel > .panel-body.list { overflow-x: hidden; }") != NULL);
+    CHECK(strstr(html,
+          "min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis;") != NULL);
     CHECK(strstr(html,
           ".pane-splitter { position: relative; z-index: 7; width: 1px; flex: 0 0 1px;") != NULL);
     CHECK(strstr(html,
           ".pane-splitter::before { content: \"\"; position: absolute; top: 0; bottom: 0; left: -6px; right: -6px; }") != NULL);
     CHECK(strstr(html,
           ".pane-splitter:hover, .pane-splitter:focus-visible, .pane-splitter.dragging { background: var(--accent); box-shadow: -1px 0 var(--accent), 1px 0 var(--accent); }") != NULL);
-    CHECK(count_text(html, "data-split-workspace") == 8);
+    CHECK(count_text(html,
+          "class=\"split-workspace primary-split\" data-split-workspace") == 3);
     CHECK(count_text(html, "data-split-variable=\"--split-primary\"") == 3);
-    CHECK(strstr(html, "data-split-variable=\"--split-rail\"") != NULL);
-    CHECK(strstr(html, "data-split-variable=\"--split-inspector\"") != NULL);
-    CHECK(strstr(html, "data-split-side=\"after\"") != NULL);
+    CHECK(count_text(html, "data-split-shared=\"app\"") == 3);
+    CHECK(count_text(html, "class=\"pane-splitter\"") == 3);
+    CHECK(strstr(html, "data-split-variable=\"--split-rail\"") == NULL);
+    CHECK(strstr(html, "data-split-variable=\"--split-inspector\"") == NULL);
+    CHECK(strstr(html, "<div class=\"ab-grid\" id=\"abTabHost\"></div>") != NULL);
+    CHECK(strstr(html, "<div class=\"ab-grid\" id=\"abModalHost\"></div>") != NULL);
     CHECK(strstr(html, "function initSplitWorkspaces()") != NULL);
     CHECK(strstr(html,
           "document.querySelectorAll('.pane-splitter').forEach(function(splitter)") != NULL);
@@ -207,7 +232,14 @@ int main(int argc, char **argv)
     CHECK(strstr(html, "e.key === 'ArrowRight'") != NULL);
     CHECK(strstr(html, "else if (e.key === 'Home')") != NULL);
     CHECK(strstr(html, "else if (e.key === 'End')") != NULL);
-    CHECK(strstr(html, "workspace.style.removeProperty(variable);") != NULL);
+    CHECK(strstr(html, "function splitStyleOwner(splitter)") != NULL);
+    CHECK(strstr(html, "owner.style.setProperty(variable") != NULL);
+    CHECK(strstr(html, "owner.style.removeProperty(variable);") != NULL);
+    CHECK(strstr(html, "id=\"newFolderBtn\" title=\"New Folder\" aria-label=\"New Folder\"") != NULL);
+    CHECK(strstr(html, "<use href=\"#icon-folder-plus\"></use>") != NULL);
+    CHECK(strstr(html, "id=\"prefabCreateBtn\" title=\"Create from Selection\"") != NULL);
+    CHECK(strstr(html,
+          "class=\"btn primary icon icon-button\" id=\"createTimelineBtn\" disabled title=\"Create New Timeline") != NULL);
     CHECK(strstr(html, "function setCamReadout(id, v)") != NULL);
     CHECK(strstr(html,
           "setCamReadout('camX', d.x); setCamReadout('camY', d.y); setCamReadout('camZ', d.z);") != NULL);

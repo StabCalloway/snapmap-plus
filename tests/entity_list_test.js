@@ -85,6 +85,8 @@ check(state.start === 8064 && state.end === 8192 && mounted === rowLimit,
   'scrolling to the end did not retain a bounded final window');
 check(nodes.entityList.innerHTML.indexOf('data-eid="8191"') >= 0,
   'final logical row was not mounted at the bottom');
+check(nodes.entityList.innerHTML.indexOf('title="entity-8191: Entity 8191"') >= 0,
+  'a clipped entity row no longer exposes its full label on hover');
 
 api.setSelected({8191:true});
 api.renderWindow(true);

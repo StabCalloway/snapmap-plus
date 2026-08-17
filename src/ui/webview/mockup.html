@@ -30,7 +30,7 @@
   /* The native host owns the outer window size. Keep the document exactly inside WebView2's current
      client rectangle so only the panes below scroll; document scrollbars would steal footer space and
      make the HTML resize grips appear to fight the Windows sizing loop. */
-  .app { display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; background: var(--bg); color: var(--text); user-select: none; -webkit-user-select: none; }
+  .app { --split-primary: 40%; display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; background: var(--bg); color: var(--text); user-select: none; -webkit-user-select: none; }
   .icon-sprite { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
   .ui-icon { width: 16px; height: 16px; display: block; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
   .icon-button { display: inline-grid; place-items: center; padding: 0; line-height: 1; text-align: center; }
@@ -78,16 +78,16 @@
    * (open browsing) and once inside a modal opened from the Entities tab (scoped to the selection).
    * Everything below is built from the existing tokens and .panel/.entity-item/.btn skeleton so the
    * browser reads as part of the app rather than a bolted-on pane. */
-  .ab-grid { --split-rail: 138px; --split-inspector: 268px; display: flex; gap: 0; align-items: stretch; flex: 1; min-height: 0; }
-  .ab-rail { width: var(--split-rail); flex: 0 0 var(--split-rail); }
+  .ab-grid { display: flex; gap: 8px; align-items: stretch; flex: 1; min-height: 0; }
+  .ab-rail { width: 138px; flex: 0 0 138px; }
   .ab-mid  { flex: 1 1 auto; min-width: 200px; }
-  .ab-insp { width: var(--split-inspector); flex: 0 0 var(--split-inspector); }
+  .ab-insp { width: 268px; flex: 0 0 268px; }
   /* Narrow window: drop the type rail first (only one type is indexed, and the filter reaches
      everything anyway). The inspector is never dropped -- it holds the preview and the copy
      button, which are the whole point of the pane. */
-  @media (max-width: 1000px) { .ab-rail, .ab-rail-splitter { display: none; } }
+  @media (max-width: 1000px) { .ab-rail { display: none; } }
   @media (max-width: 760px)  {
-    .ab-grid { --split-inspector: 42%; }
+    .ab-insp { width: 208px; flex: 0 0 208px; }
     .ab-mid, .ab-insp { min-width: 0; }
   }
 
@@ -194,7 +194,7 @@
                   overflow: hidden; }
   .modal.assets .modal-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px;
                               border-bottom: 1px solid var(--border); background: var(--panel2); flex-shrink: 0; }
-  .modal.assets .ab-grid { margin: 8px; }
+  .modal.assets .ab-grid { padding: 8px; }
   .modal.assets .modal-foot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
                               padding: 8px 12px; border-top: 1px solid var(--border);
                               background: var(--panel2); flex-shrink: 0; }
@@ -203,13 +203,35 @@
                                     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .content { position: relative; flex: 1 1 0; display: flex; min-width: 0; min-height: 0; overflow: hidden; background: var(--bg); padding: 8px; }
 
-  /* Shared split workspace. Adjacent sections are one surface with one divider, not two cards separated
-     by a gutter. The divider gets a generous transparent hit track around its visible rule; one generic
-     JS controller below drives every instance, including both dividers in the asset browser. */
-  .split-workspace { --split-primary: 40%; display: flex; align-items: stretch; flex: 1 1 0; min-width: 0; min-height: 0; overflow: hidden; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+  /* Shared split workspace for the two-section tabs. Adjacent sections are one surface with one divider,
+     not two cards separated by a gutter. Assets deliberately keeps its specialized three-column layout. */
+  .split-workspace { --pane-inline: 10px; display: flex; align-items: stretch; flex: 1 1 0; min-width: 0; min-height: 0; overflow: hidden; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
   .split-workspace > .panel { border: 0; border-radius: 0; }
   .primary-split > .left-pane { width: var(--split-primary); flex: 0 0 var(--split-primary); min-width: 0; }
   .primary-split > .right-pane { flex: 1 1 0; min-width: 0; }
+  /* Header, toolbar, padded editor, and list content all inherit the same horizontal inset. The panels
+     themselves still meet the divider, keeping header fills and horizontal rules continuous. */
+  .split-workspace > .panel > .panel-head { padding-inline: var(--pane-inline); }
+  .split-workspace > .panel > .panel-toolbar { padding-inline: var(--pane-inline); }
+  /* Match the right-side editor's separator language: its rules live inside a padded body rather than
+     touching the panel edges. Keep the original transparent border in flow, then paint the visible rule
+     as an inset overlay so header heights and toolbar geometry do not change. */
+  .split-workspace > .panel > .panel-head,
+  .split-workspace > .panel > .panel-toolbar { position: relative; border-bottom-color: transparent; }
+  .split-workspace > .panel > .panel-head::after,
+  .split-workspace > .panel > .panel-toolbar::after {
+    content: ""; position: absolute; left: var(--pane-inline); right: var(--pane-inline); bottom: -1px;
+    height: 1px; background: var(--border); pointer-events: none;
+  }
+  .split-workspace > .panel > .panel-body.pad,
+  .split-workspace > .panel > .panel-body.list { padding-inline: var(--pane-inline); }
+  /* A nowrap list label must not paint through that inset. Treat list bodies like the right-side padded
+     editors: their children stay inside the content box, with long labels ellipsized before the divider. */
+  .split-workspace > .panel > .panel-body.list { overflow-x: hidden; }
+  .split-workspace > .panel > .panel-body.list .entity-item,
+  .split-workspace > .panel > .panel-body.list .pf-item {
+    min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+  }
   .pane-splitter { position: relative; z-index: 7; width: 1px; flex: 0 0 1px; background: var(--border2); cursor: col-resize; touch-action: none; transition: background-color .12s ease, box-shadow .12s ease; }
   /* The divider occupies only its visible pixel, so neighboring header/body rules meet it instead of
      stopping across a painted gutter. This transparent pseudo-element supplies the forgiving 13px hit
@@ -266,31 +288,17 @@
 
   .placeholder { display: flex; align-items: center; justify-content: center; text-align: center; color: var(--muted); font-style: italic; padding: 20px; }
   .editor-col { display: flex; flex-direction: column; min-height: 0; height: 100%; }
-  /* distraction-free Decl Text editor: the Decl Text label/problem-count/editor/problems bar stay exactly
-     where they are in the flex column -- only the identity/fields/description chrome above and below them
-     is hidden, and the whole column takes over the content region so the editor gets the freed-up space
-     without covering the application header or footer. The
-     textarea itself is never touched, so its scroll position, selection, undo history and listeners survive
-     the toggle untouched. Save/Revert/dirty-note (normally in the covered .panel-head) are the one thing
-     that DOES move -- .focus-head below receives them for the duration, then they're moved back on exit
-     (see setDeclFocus()); they're the same nodes with the same listeners, just reparented. */
-  .editor-col.focus-mode {
-    position: absolute; inset: 14px; z-index: 1800; background: var(--panel);
-    border: 1px solid var(--border2); border-radius: 8px; box-shadow: 0 8px 28px rgba(0,0,0,0.35);
-    padding: 12px;
-    /* height:auto so BOTH insets govern -- the base .editor-col's height:100% would otherwise win over
-       the bottom inset and push the panel's bottom edge (border + 12px padding) below the content region,
-       which read as "no bottom padding" while top/sides showed theirs. */
-    height: auto;
-  }
+  /* Expanded Decl Text uses the same real modal surface as the Asset Browser. setDeclFocus() moves this
+     exact editor column into the modal host and back again, so textarea selection, scroll, undo history,
+     syntax layers, and listeners survive without cloning or synchronization. */
+  .editor-col.focus-mode { height: auto; }
   .editor-col.focus-mode .ident,
   .editor-col.focus-mode .fields,
   .editor-col.focus-mode .desc-panel { display: none; }
   .editor-col.focus-mode .section-label { margin-top: 0; }
   .editor-col.focus-mode .code-editor { min-height: 0; }
-  #declFocusBtn.active { color: var(--accent); border-color: var(--accent); }
   /* .focus-head: NOT a duplicate panel-head bar -- lives right in the "Decl Text" section-label row, next
-     to the distraction-free toggle button itself, and holds the reparented Save/Revert/dirty-note only for
+     to the modal close button itself, and holds the reparented Save/Revert/dirty-note only for
      the duration of focus mode (prob-count's margin-left:auto already pushes this + the toggle button to
      the row's right edge, so it reads as one control cluster). No pill/background of its own -- Revert/Save
      get the shared "icon icon-button" classes while here (see setDeclFocus()), the SAME classes
@@ -357,8 +365,7 @@
 
   .problems { flex-shrink: 0; display: none; max-height: 84px; overflow-y: auto; margin-top: 6px; padding: 4px 8px; background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; }
   .problems.has { display: block; }
-  .prob { display: flex; gap: 7px; padding: 1px 0; border-radius: 3px; cursor: default; }
-  .prob:hover { background: var(--sel); color: var(--selText); }
+  .prob { display: flex; gap: 7px; padding: 1px 0; border-radius: 3px; cursor: pointer; }
   .prob .sev { width: 14px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; font-weight: 600; }
   .prob .sev .ui-icon { width: 13px; height: 13px; }
   .prob .sev.err { color: var(--sqErr); } .prob .sev.warn { color: var(--sqWarn); }
@@ -482,6 +489,10 @@
   .modal-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
   .modal label { color: var(--muted); margin-top: 4px; }
   .modal textarea { min-height: 54px; resize: vertical; }
+  .modal.decl-focus-modal { width: min(1040px, 94vw); height: min(720px, 88vh); padding: 12px; gap: 0; overflow: hidden; }
+  .decl-focus-host { display: flex; flex: 1 1 0; min-width: 0; min-height: 0; }
+  .decl-focus-host > .editor-col.focus-mode { flex: 1 1 0; width: 100%; min-width: 0; min-height: 0; padding: 0; overflow: hidden; }
+  .modal.decl-focus-modal .code-editor textarea { min-height: 0; resize: none; }
   .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 
   /* feedback: the Lucide help launcher (the statusbar's rightmost item, the footer counterpart of the
@@ -559,7 +570,7 @@
     .status-camera { padding-top: 3px; }
   }
 
-  #toastHost { position: fixed; top: 40px; right: 12px; display: flex; flex-direction: column; gap: 8px; z-index: 2000; pointer-events: none; }
+  #toastHost { position: fixed; top: 40px; right: 12px; display: flex; flex-direction: column; gap: 8px; z-index: 4000; pointer-events: none; }
   .toast { min-width: 150px; max-width: 320px; padding: 8px 12px; background: #333; color: #fff; border-radius: 6px; font-size: 11px; box-shadow: 0 4px 14px rgba(0,0,0,0.32); opacity: 0; transform: translateX(120%); transition: opacity .28s ease, transform .28s cubic-bezier(.2,.8,.2,1); }
   .toast.show { opacity: 1; transform: translateX(0); }
   .toast.ok   { background: #2e7d46; }
@@ -619,6 +630,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   <symbol id="icon-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"></path></symbol>
   <symbol id="icon-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></symbol>
   <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M5 12h14"></path><path d="M12 5v14"></path></symbol>
+  <symbol id="icon-folder-plus" viewBox="0 0 24 24"><path d="M12 10v6"></path><path d="M9 13h6"></path><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></symbol>
   <symbol id="icon-refresh-cw" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path><path d="M8 16H3v5"></path></symbol>
   <symbol id="icon-maximize-2" viewBox="0 0 24 24"><path d="M15 3h6v6"></path><path d="m21 3-7 7"></path><path d="m3 21 7-7"></path><path d="M9 21H3v-6"></path></symbol>
   <symbol id="icon-minimize-2" viewBox="0 0 24 24"><path d="m14 10 7-7"></path><path d="M20 10h-6V4"></path><path d="m3 21 7-7"></path><path d="M4 14h6v6"></path></symbol>
@@ -684,7 +696,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     <div class="pane-splitter" role="separator" tabindex="0"
          aria-label="Resize Entities and Entity State" aria-orientation="vertical"
          aria-valuemin="180" aria-valuemax="1200" aria-valuenow="576"
-         data-split-variable="--split-primary" data-split-side="before"
+         data-split-variable="--split-primary" data-split-shared="app" data-split-side="before"
          data-min-before="180" data-min-after="280" data-split-label="Entities"
          title="Drag to resize Entities and Entity State; double-click to reset"></div>
 
@@ -714,7 +726,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         <div class="section-label"><span>Decl Text</span>
           <span class="prob-count" id="probCount"></span>
           <div class="focus-head" id="focusHead"></div>
-          <button type="button" class="btn icon icon-button" id="declFocusBtn" title="Focus mode (Esc to exit)" aria-label="Enter focus mode"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-maximize-2"></use></svg></button>
+          <button type="button" class="btn icon icon-button" id="declFocusBtn" title="Expand Decl Text editor" aria-label="Expand Decl Text editor"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-maximize-2"></use></svg></button>
         </div>
         <div class="code-editor" id="codeEditor">
           <div class="ce-gutter" aria-hidden="true"><div id="declGutter"></div></div>
@@ -739,8 +751,8 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       <div class="panel-head">
         <span class="panel-title">Prefabs</span><span class="badge" id="pfBadge">0</span>
         <div class="panel-actions">
-          <button class="btn" id="newFolderBtn">New Folder</button>
-          <button class="btn primary" id="prefabCreateBtn">Create from selection</button>
+          <button type="button" class="btn icon icon-button" id="newFolderBtn" title="New Folder" aria-label="New Folder"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-folder-plus"></use></svg></button>
+          <button type="button" class="btn primary icon icon-button" id="prefabCreateBtn" title="Create from Selection" aria-label="Create from Selection"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-plus"></use></svg></button>
         </div>
       </div>
       <div class="panel-toolbar">
@@ -751,7 +763,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     <div class="pane-splitter" role="separator" tabindex="0"
          aria-label="Resize Prefabs and Prefab Details" aria-orientation="vertical"
          aria-valuemin="220" aria-valuemax="1200" aria-valuenow="576"
-         data-split-variable="--split-primary" data-split-side="before"
+         data-split-variable="--split-primary" data-split-shared="app" data-split-side="before"
          data-min-before="220" data-min-after="280" data-split-label="Prefabs"
          title="Drag to resize Prefabs and Prefab Details; double-click to reset"></div>
     <div class="panel right-pane">
@@ -781,7 +793,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   <!-- Assets tab: open browsing. The same three-column browser is mounted again inside
        #assetModal, scoped to the Entities-tab selection. See abMount(). -->
   <div class="content" id="panel-assets" style="display:none;">
-    <div class="ab-grid split-workspace" id="abTabHost" data-split-workspace></div>
+    <div class="ab-grid" id="abTabHost"></div>
   </div>
 
   <div class="content" id="panel-timelines" style="display:none;">
@@ -790,7 +802,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       <div class="panel-head">
         <span class="panel-title">Timelines</span><span class="badge" id="tlBadge">0</span>
         <div class="panel-actions">
-          <button class="btn" id="createTimelineBtn" disabled title="Not implemented -- place a timeline from the in-game SnapMap palette instead.">Create New Timeline</button>
+          <button type="button" class="btn primary icon icon-button" id="createTimelineBtn" disabled title="Create New Timeline (not implemented -- place a timeline from the in-game SnapMap palette instead)." aria-label="Create New Timeline"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-plus"></use></svg></button>
         </div>
       </div>
       <div class="panel-toolbar">
@@ -801,7 +813,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     <div class="pane-splitter" role="separator" tabindex="0"
          aria-label="Resize Timelines and Timeline Editor" aria-orientation="vertical"
          aria-valuemin="200" aria-valuemax="1200" aria-valuenow="576"
-         data-split-variable="--split-primary" data-split-side="before"
+         data-split-variable="--split-primary" data-split-shared="app" data-split-side="before"
          data-min-before="200" data-min-after="320" data-split-label="Timelines"
          title="Drag to resize Timelines and Timeline Editor; double-click to reset"></div>
     <div class="panel right-pane">
@@ -842,6 +854,13 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 <div id="toastHost"></div>
 <div class="rz rz-t"></div><div class="rz rz-b"></div><div class="rz rz-l"></div><div class="rz rz-r"></div>
 <div class="rz rz-tl"></div><div class="rz rz-tr"></div><div class="rz rz-bl"></div><div class="rz rz-br"></div>
+<!-- Expanded Decl Text reuses the live #editor node inside this standard modal host. -->
+<div class="modal-overlay" id="declFocusModal" style="display:none;" aria-hidden="true">
+  <div class="modal decl-focus-modal" role="dialog" aria-modal="true" aria-label="Expanded Decl Text editor">
+    <div class="decl-focus-host" id="declFocusHost"></div>
+  </div>
+</div>
+
 <!-- Asset browser opened from the Entities tab. Same browser as the Assets tab, mounted a second
      time into #abModalHost, plus a header/footer that name the entity it is scoped to. -->
 <div class="modal-overlay" id="assetModal" style="display:none;">
@@ -851,7 +870,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       <span class="muted" id="amFor" style="font-family:Consolas,'Courier New',monospace"></span>
       <div style="margin-left:auto"><button type="button" class="btn icon icon-button" id="amClose" title="Close (Esc)" aria-label="Close asset browser"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-x"></use></svg></button></div>
     </div>
-    <div class="ab-grid split-workspace" id="abModalHost" data-split-workspace></div>
+    <div class="ab-grid" id="abModalHost"></div>
     <div class="modal-foot">
       <span class="grow" id="amPath">Nothing selected.</span>
       <button class="btn" id="amCancel">Close</button>
@@ -2529,7 +2548,8 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   function entityRowHtml(e) {
     var cls = 'entity-item'+(e.hidden?' hidden-ent':'')+(selectedEids[e.eid]?' selected':'');
     var label = e.name ? (': <span class="name">'+esc(e.name)+'</span>') : '';
-    return '<div class="'+cls+'" data-eid="'+e.eid+'">'+esc(e.id)+label+'</div>';
+    var fullLabel = e.id + (e.name ? ': ' + e.name : '');
+    return '<div class="'+cls+'" data-eid="'+e.eid+'" title="'+esc(fullLabel)+'">'+esc(e.id)+label+'</div>';
   }
 
   function renderEntityWindow(force) {
@@ -3444,7 +3464,9 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   // ---- state editor ----
   function showPlaceholder(html) {
     acClose();   // the editor pane is going away -- never leave a stale completion popup/state behind
-    document.getElementById('editor').style.display = 'none';
+    var editor = document.getElementById('editor');
+    if (editor.classList.contains('focus-mode')) setDeclFocus(false);
+    editor.style.display = 'none';
     // #selInfo is a flex CENTERING container, so multiple top-level nodes (text + <br> + <span>) become
     // separate ROW flex items sitting side-by-side; wrap the content in one block so multi-line
     // placeholders stack as normal lines.
@@ -3467,23 +3489,23 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     updateSelDom();
     showPlaceholder('Select an entity from the list.');
   }
-  // Blank structural surfaces are the app-wide escape hatch for entity selection. Controls, rows,
-  // editable text, and menus keep their own click behavior. The complete Entity State pane is also
-  // protected: it is inspection/editing space for the current entity, including its blank padding and
-  // the expanded Decl Text layout, so ordinary work there must never destroy the state being inspected.
-  function isEntityWhitespaceTarget(target) {
+  // One blank-space router owns deselection for every selectable workspace. Controls and rows keep their
+  // own click behavior, while every right-hand inspection/editor pane is protected so normal work there
+  // cannot destroy the state being inspected. The entity selection remains app-wide; Prefabs and Timelines
+  // additionally clear their own row/editor state when their left-side whitespace is clicked.
+  function isSelectionWhitespaceTarget(target) {
     if (!target || !target.matches || !target.closest('.app')) return false;
-    if (target.closest('#panel-entities .right-pane')) return false;
+    if (target.closest('.right-pane')) return false;
     if (target.closest('.menubar, button, input, textarea, select, label, a, [role="button"], [role="separator"], [contenteditable="true"], .entity-item, .pf-item, .tl-inner-tab, .event-row, .combo-list, .desc-panel')) return false;
     return target.matches(
-      '.tabstrip, .content, .panel, .panel-head, .panel-toolbar, .opts-row, ' +
+      '.tabstrip, .content, .split-workspace, .panel, .panel-head, .panel-toolbar, .opts-row, ' +
       '.panel-body, .panel-actions, .list, .editor-col, .fields, .field, ' +
       '.ident, .ident-sub, .section-label, .focus-head, .problems, ' +
-      '.prefab-card, .pc-header, .pc-chips, .ab-grid, .ab-sect, ' +
+      '.prefab-card, .pc-header, .pc-chips, .pf-folder, .pf-folder-body, .ab-grid, .ab-sect, ' +
       '.statusbar, .status-group, .spacer, .placeholder, .list-empty, .tl-inner-body, ' +
       '.event-list, .editor-spacer');
   }
-  function clearEntitySelectionFromWhitespace() {
+  function clearEntitySelection() {
     if (!selCount()) return;
     var editor = document.getElementById('editor');
     if (editor.classList.contains('focus-mode')) setDeclFocus(false);
@@ -3492,6 +3514,13 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     anchorEid = -1;
     updateSelDom();
     refreshEditorForSelection(false);   // native was told directly, so do not push an empty selection again
+  }
+  function clearWorkspaceSelectionsFromWhitespace(target) {
+    if (!isSelectionWhitespaceTarget(target)) return;
+    var panel = target.closest('.content');
+    clearEntitySelection();
+    if (panel && panel.id === 'panel-prefabs' && selectedPrefabName) clearPrefabSelection();
+    if (panel && panel.id === 'panel-timelines' && (selectedTlEid !== -1 || tlModel)) tlCloseEditor();
   }
   // The state editor edits ONE decl, so it only shows for a single selection. 2+ selected -> a placeholder
   // that points at the right-click menu (the multi-entity actions). Called after any selection change.
@@ -4105,8 +4134,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     persistEntitySetting(ENTITY_SELECTION_MODE_KEY, mode);
   });
   document.querySelector('.app').addEventListener('click', function(e){
-    if (selCount() && isEntityWhitespaceTarget(e.target))
-      clearEntitySelectionFromWhitespace();
+    clearWorkspaceSelectionsFromWhitespace(e.target);
   });
   document.getElementById('saveBtn').addEventListener('click', doSave);
   document.getElementById('copyIdBtn').addEventListener('click', function(){
@@ -4114,20 +4142,26 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     if (v) { copyText(v); toast('Copied ID', 'ok'); }
   });
   document.getElementById('revertBtn').addEventListener('click', doRevert);
-  // Distraction-free Decl Text editor: toggles .focus-mode on the editor-col (pure CSS -- the identity/
-  // fields/description chrome hides, the column takes over the viewport, the code-editor grows into the
-  // freed space). No DOM nodes move, so the textarea's scroll/selection/undo/listeners are untouched.
-  // Re-sync the <pre> highlight overlay's scroll after the layout change (its own scroll listener only
-  // fires on user-driven scroll, not on a resize that happens to reveal more/less of the same content).
+  // Expanded Decl Text is a real modal, matching Asset Browser. Move the SAME editor node into its modal
+  // host rather than cloning it; moving a DOM node preserves the textarea's value, selection, scroll, undo
+  // history, syntax layers, and every attached listener. A comment anchor restores its exact home slot.
+  var declFocusAnchor = null;
+  var declFocusOverlay = document.getElementById('declFocusModal');
   function setDeclFocus(on) {
     var col = document.getElementById('editor'), btn = document.getElementById('declFocusBtn');
+    on = !!on;
+    if (on === col.classList.contains('focus-mode')) return;
+    if (on) {
+      declFocusAnchor = document.createComment('decl editor home');
+      col.parentNode.insertBefore(declFocusAnchor, col);
+      document.getElementById('declFocusHost').appendChild(col);
+    }
     col.classList.toggle('focus-mode', on);
-    btn.classList.toggle('active', on);
-    btn.title = on ? 'Exit focus mode (Esc)' : 'Focus mode (Esc to exit)';
-    btn.setAttribute('aria-label', on ? 'Exit focus mode' : 'Enter focus mode');
-    setIcon(btn, on ? 'minimize-2' : 'maximize-2');
-    // Save/Revert/dirty-note live in .panel-head, which the expanded overlay covers -- move the SAME
-    // node (not a clone) into .focus-head for the duration so they stay usable, then move it back on exit.
+    btn.title = on ? 'Close (Esc)' : 'Expand Decl Text editor';
+    btn.setAttribute('aria-label', on ? 'Close expanded Decl Text editor' : 'Expand Decl Text editor');
+    setIcon(btn, on ? 'x' : 'maximize-2');
+    // Save/Revert/dirty-note live in .panel-head below the modal -- move the SAME node (not a clone) into
+    // .focus-head for the duration so they stay usable, then move it back on exit.
     // updateDirty()/doSave()/doRevert() already target these elements by id, so nothing else needs to change.
     var dest = document.getElementById(on ? 'focusHead' : 'entityStateHead');
     dest.appendChild(document.getElementById('panelActions'));
@@ -4149,10 +4183,25 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       revertBtn.removeAttribute('title'); saveBtn.removeAttribute('title');
       revertBtn.removeAttribute('aria-label'); saveBtn.removeAttribute('aria-label');
     }
-    refreshDeclScroll();
+    if (on) {
+      declFocusOverlay.style.display = 'flex';
+      declFocusOverlay.setAttribute('aria-hidden', 'false');
+    } else {
+      if (declFocusAnchor && declFocusAnchor.parentNode) {
+        declFocusAnchor.parentNode.insertBefore(col, declFocusAnchor);
+        declFocusAnchor.parentNode.removeChild(declFocusAnchor);
+      }
+      declFocusAnchor = null;
+      declFocusOverlay.style.display = 'none';
+      declFocusOverlay.setAttribute('aria-hidden', 'true');
+    }
+    requestAnimationFrame(refreshDeclScroll);
   }
   document.getElementById('declFocusBtn').addEventListener('click', function(){
     setDeclFocus(!document.getElementById('editor').classList.contains('focus-mode'));
+  });
+  declFocusOverlay.addEventListener('mousedown', function(e){
+    if (e.target === declFocusOverlay) setDeclFocus(false);
   });
   // BUGFIX (user-reported, "the highlight moves the data around"): a browser text control ships with
   // native text drag-and-drop -- press on an ALREADY-selected range, move the mouse, and the browser MOVES
@@ -4315,9 +4364,10 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     if (el) el.addEventListener('mousedown', function(e){ if (e.button === 0) { e.preventDefault(); post({cmd:'winResize', dir:p[1]}); } });
   });
 
-  // Shared section splitter. Every tab supplies only its CSS variable, side, labels, and preferred
-  // desktop minima; pointer/keyboard behavior, compact-width relaxation, reset, ARIA, and resize
-  // clamping all live here. The asset browser uses the same controller twice for its three sections.
+  // Shared section splitter. Entities, Prefabs, and Timelines all write the same app-level width, so
+  // moving the line in any one tab keeps it in exactly the same place in the other two. Each tab supplies
+  // only labels and preferred minima; pointer/keyboard behavior, compact-width relaxation, reset, ARIA,
+  // and resize clamping all live here. The Assets tab deliberately does not opt into this framework.
   var SPLIT_DRAG = null;
   var splitResizeQueued = false;
   function splitClamp(value, low, high) { return Math.max(low, Math.min(high, value)); }
@@ -4330,6 +4380,11 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   function splitAttrNumber(splitter, name, fallback) {
     var value = Number(splitter.getAttribute(name));
     return isFinite(value) && value >= 0 ? value : fallback;
+  }
+  function splitStyleOwner(splitter) {
+    if (!splitter) return null;
+    if (splitter.getAttribute('data-split-shared') === 'app') return splitter.closest('.app');
+    return splitter.closest('[data-split-workspace]');
   }
   function splitBounds(splitter) {
     var parts = splitParts(splitter);
@@ -4378,12 +4433,15 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       (splitter.getAttribute('data-split-label') || 'the section'));
   }
   function splitApplyWidth(splitter, value) {
-    var workspace = splitter.closest('[data-split-workspace]');
+    var owner = splitStyleOwner(splitter);
     var variable = splitter.getAttribute('data-split-variable');
     var bounds = splitBounds(splitter);
-    if (!workspace || !variable || !bounds) return;
-    workspace.style.setProperty(variable, Math.round(splitClamp(Number(value), bounds.min, bounds.max)) + 'px');
-    splitUpdateAria(splitter);
+    if (!owner || !variable || !bounds) return;
+    owner.style.setProperty(variable, Math.round(splitClamp(Number(value), bounds.min, bounds.max)) + 'px');
+    document.querySelectorAll('.pane-splitter').forEach(function(candidate){
+      if (candidate.getAttribute('data-split-variable') === variable && splitStyleOwner(candidate) === owner)
+        splitUpdateAria(candidate);
+    });
   }
   function splitConstrain(splitter) {
     var bounds = splitBounds(splitter);
@@ -4421,11 +4479,11 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     splitUpdateAria(splitter);
   }
   function splitReset(splitter) {
-    var workspace = splitter.closest('[data-split-workspace]');
+    var owner = splitStyleOwner(splitter);
     var variable = splitter.getAttribute('data-split-variable');
-    if (!workspace || !variable) return;
-    workspace.style.removeProperty(variable);
-    requestAnimationFrame(function(){ splitConstrain(splitter); });
+    if (!owner || !variable) return;
+    owner.style.removeProperty(variable);
+    queueSplitConstrain();
   }
   function initSplitWorkspaces() {
     document.querySelectorAll('.pane-splitter').forEach(function(splitter){
@@ -5553,12 +5611,6 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     host.innerHTML =
         '<div class="panel ab-rail"><div class="panel-head"><span class="panel-title">Asset type</span></div>'
       +   '<div class="panel-body"><div class="list" data-ab="rail"></div></div></div>'
-      + '<div class="pane-splitter ab-rail-splitter" role="separator" tabindex="0"'
-      +   ' aria-label="Resize Asset Type and Catalog" aria-orientation="vertical"'
-      +   ' aria-valuemin="100" aria-valuemax="400" aria-valuenow="138"'
-      +   ' data-split-variable="--split-rail" data-split-side="before"'
-      +   ' data-min-before="100" data-min-after="180" data-split-label="Asset Type"'
-      +   ' title="Drag to resize Asset Type and Catalog; double-click to reset"></div>'
       + '<div class="panel ab-mid"><div class="panel-head"><span class="panel-title">Catalog</span>'
       +     '<span class="badge" data-ab="cnt">0</span>'
       /* No Refresh control. The catalog is indexed ONCE per process (imgpreview_load's g_loaded
@@ -5580,12 +5632,6 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       +       '<input type="checkbox" data-ab="xplat"> Cross Platform Textures Only</label>'
       +     '<div class="ab-crumbs" data-ab="crumbs"></div></div>'
       +   '<div class="panel-body"><div class="list" data-ab="tree"></div></div></div>'
-      + '<div class="pane-splitter" role="separator" tabindex="0"'
-      +   ' aria-label="Resize Catalog and Asset Inspector" aria-orientation="vertical"'
-      +   ' aria-valuemin="180" aria-valuemax="520" aria-valuenow="268"'
-      +   ' data-split-variable="--split-inspector" data-split-side="after"'
-      +   ' data-min-before="180" data-min-after="180" data-split-label="Asset Inspector"'
-      +   ' title="Drag to resize Catalog and Asset Inspector; double-click to reset"></div>'
       + '<div class="panel ab-insp"><div class="panel-head"><span class="panel-title">Asset</span>'
       +     '<span class="hint" data-ab="pvstatus" style="margin-left:auto;font-style:normal"></span></div>'
       +   '<div class="panel-body" data-ab="insp"></div></div>';
@@ -6821,7 +6867,6 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     document.getElementById('amPath').textContent = abModalMount.sel || 'Nothing selected.';
     amOverlay.style.display = 'flex';
     abActive = abModalMount;
-    queueSplitConstrain();
     abOpenCatalog(abModalMount);
     abSyncSoundSession();   /* the modal is the browser too -- same mode, same one decision */
     var q = abModalMount.el('q'); if (q) q.focus();
@@ -7249,8 +7294,6 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         selectedPrefabName = item.textContent;
         selectedPrefabFolder = item.getAttribute('data-folder') || '';
         post({cmd:'selectPrefab', name: item.textContent, folder: selectedPrefabFolder});
-      } else {
-        clearPrefabSelection();   // blank space -> deselect; the detail card empties and the buttons grey out
       }
     });
     prefabTree.addEventListener('dragstart', function(e){
@@ -7407,14 +7450,18 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   document.getElementById('pcTags').addEventListener('keydown', function(e){
     if (e.key === 'Enter') { e.preventDefault(); savePrefabMetaIfChanged(); }
   });
-  // selection-aware Create button: editorSelCount is kept live via the native "selCount" broadcast
+  // Selection-aware Create icon: editorSelCount is kept live via the native "selCount" broadcast
   // (get_selection, polled every ~330ms independent of the sync checkboxes). PREVIEW has no live editor,
   // so it starts with a nonzero demo value to keep the button clickable while poking around.
   var editorSelCount = PREVIEW ? 5 : 0;
   function updateCreateBtn(){
     var b = document.getElementById('prefabCreateBtn'); if (!b) return;
-    if (editorSelCount > 0){ b.disabled = false; b.textContent = 'Create from selection (' + editorSelCount + ')'; b.removeAttribute('title'); }
-    else { b.disabled = true; b.textContent = 'Create from selection'; b.setAttribute('title', 'Select entities in the editor first'); }
+    var label = editorSelCount > 0
+      ? 'Create from Selection (' + editorSelCount + ' selected)'
+      : 'Create from Selection - select entities in the editor first';
+    b.disabled = editorSelCount < 1;
+    b.setAttribute('title', label);
+    b.setAttribute('aria-label', label);
   }
   updateCreateBtn();
   var npSelInfo = document.getElementById('npSelInfo');

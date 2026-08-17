@@ -62,10 +62,10 @@ The frontend holds no engine addresses; it calls the backend only through the vt
 | Camera origin footer (read-only X/Y/Z) | `get_editor_vec3` +0x08; the dormant `camSet` / `camLock` bridge and `set_editor_vec3` +0x00 path remain implemented for a future control |
 | Installed version readout | reads `%LOCALAPPDATA%\snapmap-plus\install.json` (written by the installer) |
 | Persistent settings (Light / Dark and Entities controls) | `config_get_json` +0x2B0, `config_set_json` +0x2B8 — registered UTF-8 JSON fragments owned by the backend |
-| Deselect (click a blank structural surface outside Entity State) | `clear_selection` +0x148; the complete Entity State pane, including expanded Decl Text, is protected inspection space |
+| Deselect (click a blank structural surface) | One page-level router calls `clear_selection` +0x148 for the app-wide entity selection and also tears down the active Prefab/Timeline selection; every right-hand inspection/editor pane, including expanded Decl Text, is protected workspace |
 | List-driven selections behave natively (empty-space click deselects; Delete / Move / bottom-bar controls all apply) | `add_to_selection` +0x138, `clear_selection` +0x148 and `remove_from_selection` +0x130 additionally sync the editor's EntityMode selection-state field (`editor+0x22330`, state `+0x1ac`, dirty `+0xBB8`) -- the field the engine's own empty-space-click handler consults. Direct SEH-guarded field writes, gated on the editor already being in EntityMode. Re-derive recipe at the constant block in `src/backend/iface_engine.c`. |
 | Entities list clears its highlight on a native deselect ("Select in 3D" mode) | the existing `selCount` broadcast (`get_selection` +0x150, ~330 ms poll); the UI now acts on its >0 -> 0 transition |
-| Live "Create from selection (N)" button count | `get_selection` +0x150, polled every ~330 ms independent of the sync checkboxes |
+| Live Create-from-Selection icon state/count tooltip | `get_selection` +0x150, polled every ~330 ms independent of the sync checkboxes |
 | Prefabs list, detail pane, delete/rename, folders (create/rename/delete/move) | `resolve_prefab_path` +0xc0 only -- pure Win32 file/directory ops (`FindFirstFileA`, `DeleteFileA`, `MoveFileA`, `CreateDirectoryA`, `RemoveDirectoryA`) on the resolved path. No other engine slot involved, unaffected by the +0xb0 issues below. |
 | Create from selection | `serialize_selection` +0xb0 |
 | Load / Place | `apply_edit` kind=1 (the same staging path `sh mkcmd` uses) -- stages into the paste slot only; the user presses Ctrl+V themselves. See the Changelog for why this is stage-only rather than fully automated. |
@@ -115,30 +115,50 @@ through it).
 Newest first. Each dated entry covers one working session's worth of change; the undated **Baseline**
 entry at the bottom is the original POC buildout, before this doc tracked dates per entry.
 
+### 2026-08-17 -- Expanded Decl Text becomes a real modal
+
+- **The expanded editor now uses the same modal model as Asset Browser.** The old focus-mode box was
+  absolutely painted over the existing split workspace, leaving the original panel and its border visible
+  underneath. The live editor column is now moved into a single bordered dialog over the standard dimmed
+  backdrop; clicking the backdrop, its Lucide close button, or Escape restores it to Entity State.
+- **There is still only one editor.** A temporary DOM anchor restores the exact same node, preserving the
+  textarea value, selection, scroll position, undo history, syntax-highlight layer, diagnostics, and event
+  listeners. Losing the single-entity inspection state also closes/restores the modal before the normal
+  placeholder appears. Toasts render above modal backdrops so Save/Revert feedback remains visible.
+- **Diagnostic rows no longer flash a selection highlight on hover.** They remain clickable to select the
+  corresponding source token and now communicate that behavior with a pointer cursor only.
+
 ### 2026-08-17 -- Shared adjustable section splitters
 
 - **Adjacent sections are now one workspace instead of two bordered cards.** Entities/Entity State,
   Prefabs/Prefab Details, and Timelines/Timeline Editor share a single outer surface with one vertical
   divider. Every section header occupies the same fixed 40px track, so an icon action such as Refresh
-  cannot make one header sit lower than its neighbor.
+  cannot make one header sit lower than its neighbor. Both halves inherit one 10px horizontal content
+  inset. The pane surfaces and header fills still meet directly at the vertical rule, while visible header
+  and toolbar separators stop at that inset, matching the horizontal-line language inside Entity State.
+  Long list rows are clipped with an ellipsis inside the inset instead of painting through it toward the
+  divider; an entity row exposes its complete path/name on hover.
 - **The divider is adjustable and accessible.** A transparent 13px hit target leaves six clickable
   pixels on either side of the one-pixel rule; hover, keyboard focus, and dragging expand that rule to a
   three-pixel accent without adding layout width.
   Dragging changes the section widths, arrow keys move it in 16px steps, Home/End reach the allowed
-  bounds, and double-click restores the CSS default. Because only the visible pixel participates in
-  layout, header fills and horizontal section rules meet the divider instead of being cut off by a gutter.
-- **One controller serves every tab.** A shared split-workspace implementation owns pointer capture,
-  keyboard behavior, compact-window minimum relaxation, resize clamping, reset, and ARIA values. The
-  Assets tab and its modal use the same controller for both Asset Type/Catalog and Catalog/Inspector
-  dividers rather than carrying separate resize code.
+  bounds, and double-click restores the CSS default. Only the visible pixel participates in layout, so
+  there is no painted gutter; horizontal separators use the intentional pane inset described above.
+- **One position carries across all three two-section tabs.** Moving the divider in Entities, Prefabs, or
+  Timelines writes one app-level width, so switching tabs keeps the line at the same horizontal position.
+  A shared implementation owns pointer capture, keyboard behavior, compact-window minimum relaxation,
+  resize clamping, reset, and ARIA values. Assets is intentionally exempt: its tab and modal retain the
+  purpose-built three-column Asset Type / Catalog / Inspector layout with normal inter-panel spacing and
+  no draggable divider.
 
 ### 2026-08-17 -- Viewport-bounded shell at compact window sizes
 
 - **The document no longer scrolls underneath the app chrome.** The HTML root and app shell are clamped
   to the WebView2 client rectangle, the content region may shrink to zero height, and scrolling remains
   inside the individual panes. A document-level horizontal scrollbar can no longer consume the bottom
-  of a short viewport or push the footer below it. Expanded Decl Text is now positioned inside that
-  content region rather than across the whole viewport, so focus mode cannot cover the header or footer.
+  of a short viewport or push the footer below it. Expanded Decl Text now uses a client-bounded modal,
+  keeping its dialog inside the viewport while the normal header/footer remain stationary beneath the
+  dimmed backdrop.
 - **The footer reflows instead of defining the window width.** At compact widths, connection/selection
   and Updated/help stay on the first row while the read-only X/Y/Z group becomes a full-width second
   row with three shrinkable columns. Tabs, the two primary panes, and the asset browser also relinquish
@@ -163,14 +183,15 @@ entry at the bottom is the original POC buildout, before this doc tracked dates 
 
 ### 2026-08-17 -- Flat controls, Lucide actions, and whitespace deselection
 
-- **The conditional Deselect button is gone.** Clicking a blank structural surface outside Entity State
-  now clears both the page selection and the 3D-editor selection. Buttons, fields, selectable rows, and
-  menus keep their own click behavior. The entire Entity State pane is protected inspection space:
-  clicking its controls, editor, or blank padding never clears the entity, including while Decl Text is
-  expanded.
+- **The conditional Deselect button is gone.** One page-level handler clears both the page and 3D-editor
+  entity selection from blank structural space; in Prefabs and Timelines the same handler also clears the
+  active list item and its detail/editor state. Buttons, fields, selectable rows, and menus keep their own
+  click behavior. Every right-hand inspection/editor pane is protected, including Entity State while Decl
+  Text is expanded, so ordinary editing and blank-padding clicks never destroy the inspected selection.
 - **Icon-only actions now share the Lucide SVG sprite and one centering contract.** This covers window
   controls, Refresh, Copy ID, combo arrows, focus/restore, feedback, modal close, Timeline add/remove,
-  event and prefab-folder removal, and the asset browser's pin/copy/play actions. Dynamically rendered
+  event and prefab-folder removal, Prefab Create/New Folder, Timeline Create, and the asset browser's
+  pin/copy/play actions. Create actions expose their full names as hover text. Dynamically rendered
   actions that were clickable spans or divs are real buttons with accessible labels; the old text `?`
   feedback glyph is now Lucide Circle Help.
 - **Buttons stay put when pressed.** Active clicks highlight the border without translating the control.
@@ -983,7 +1004,7 @@ that doc for the write-up.
     generic engine "SnapStack: ..." toast is suppressed for this op specifically (`ae_toast_result` skips
     it for `op == "load-prefab"`) since the webview's own toast already tells the user what to do next;
     the `sh mkcmd` console command still gets the engine toast, since it has no toast of its own.
-  - Live "Create from selection (N)" button count and the create modal's "From N selected entities" text
+  - Live Create-from-Selection icon state/count tooltip and the create modal's "From N selected entities" text
     both track the real editor selection continuously (two separate display bugs fixed: the count used to
     silently cap at 64 regardless of the real selection size, and the modal text never updated at all --
     it was stuck on its original static placeholder).

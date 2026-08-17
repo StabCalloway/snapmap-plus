@@ -160,16 +160,22 @@ int main(int argc, char **argv)
           "persistEntitySetting(ENTITY_SELECTION_MODE_KEY, mode)") == 2);
     CHECK(count_text(html, "localStorage") == 2);
     CHECK(strstr(html, "id=\"deselectBtn\"") == NULL);
-    CHECK(strstr(html, "function isEntityWhitespaceTarget(target)") != NULL);
+    CHECK(strstr(html, "function isSelectionWhitespaceTarget(target)") != NULL);
     CHECK(strstr(html,
-          "if (target.closest('#panel-entities .right-pane')) return false;") != NULL);
+          "if (target.closest('.right-pane')) return false;") != NULL);
     CHECK(strstr(html, "[role=\"separator\"]") != NULL);
     CHECK(strstr(html,
-          "function clearEntitySelectionFromWhitespace()") != NULL);
+          "function clearEntitySelection()") != NULL);
+    CHECK(strstr(html,
+          "function clearWorkspaceSelectionsFromWhitespace(target)") != NULL);
+    CHECK(strstr(html,
+          "panel.id === 'panel-prefabs' && selectedPrefabName") != NULL);
+    CHECK(strstr(html,
+          "panel.id === 'panel-timelines' && (selectedTlEid !== -1 || tlModel)") != NULL);
     CHECK(strstr(html,
           "document.querySelector('.app').addEventListener('click'") != NULL);
     CHECK(strstr(html,
-          "if (selCount() && isEntityWhitespaceTarget(e.target))") != NULL);
+          "clearWorkspaceSelectionsFromWhitespace(e.target);") != NULL);
     CHECK(count_text(html, "post({cmd:'deselect'});") == 1);
     CHECK(strstr(html,
           "if (editor.classList.contains('focus-mode')) setDeclFocus(false);") != NULL);
