@@ -116,6 +116,34 @@ through it).
 Newest first. Each dated entry covers one working session's worth of change; the undated **Baseline**
 entry at the bottom is the original POC buildout, before this doc tracked dates per entry.
 
+### 2026-08-16 -- Bounded Entities rendering and lifecycle performance evidence
+
+- **The Entities pane no longer creates one DOM row per map entity.** The previous list publication
+  replaced `innerHTML` with as many as 8,192 rows, restored `scrollTop` against that new tree, queried
+  every row, and attached two listeners to each. The filtered entity array and `visibleEids` remain
+  complete, but the page now mounts at most 128 fixed-pitch rows between scroll spacers. Filtering,
+  Shift range selection, keyboard navigation, selection counts, and Show Hidden still operate on the
+  complete logical list. Mouse and context-menu input are delegated once from the stable scroller.
+- **The native and page halves now leave correlated performance evidence.** Every actual list
+  publication gets a sequence number. `webview_poc.log` records native collection, change-gated
+  Timeline rescan, JSON size/build/post time, and the page's matched/mounted row counts plus synchronous
+  render/handler time. The complete unchanged 330 ms auto-task is summarized once per 90 calls, broken
+  down into entity collection, selection sync, and displayed-state refresh; only a collection over 5 ms
+  or a complete poll over 10 ms logs immediately. Editor visible/hidden transitions delimit map
+  load/reload intervals, and log timestamps now include milliseconds.
+- **Large synchronized selections no longer take quadratic time to order.** Follow Selection still sorts
+  entity ids before hashing and publishing them, but now uses `std::sort` instead of insertion-sorting the
+  full selection every 330 ms. This does not explain an unselected map-load hitch, but removes a separate
+  avoidable high-entity-count path without changing the selection message's order or contents.
+- **Rawmap test loads now have a pointer-independent completion signal.** The backend exports a read-only
+  count of substituted `DeserializeFromJson` calls that have returned. Diagnostic clients can compare the
+  count around a load instead of assuming `idSnapMap` must move; the export does no polling and adds no
+  work to an ordinary editor frame.
+- **This fixes a deterministic scaling defect, not an unproven diagnosis.** The occasional severe,
+  minute-scale frame-drop report is not reliably reproducible. The bounded DOM removes the list's known
+  startup hitch, while the event-driven diagnostics establish whether Snapmap+ was busy or idle during
+  the next severe occurrence before any broader engine-side change is considered.
+
 ### 2026-08-15 -- Letterboxed phone preview
 
 - **The remote preview now presents the native desktop canvas instead of reflowing it for a phone.**

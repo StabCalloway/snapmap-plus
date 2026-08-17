@@ -32,6 +32,7 @@
 # The JS checks run after the native suite:
 #   decl_overlay_test -- syntax-paint/text alignment for the Entity State editor
 #   decl_index_order_test -- numeric item[n] presentation, nesting, and 1000-boundary regression
+#   entity_list_test -- bounded DOM window, full logical filtering, selection, and event delegation
 # -Doom <unpacked DOOMx64vk.exe>: ALSO the signature-resolver tests, which scan a real
 #   (Steamless-unpacked) DOOM image:
 #   sig_test            -- every engine signature resolves to its known RVA
@@ -109,7 +110,7 @@ Write-Host ""; Write-Host "all native tests passed ($($tests.Count))"
 
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) { Write-Host "[FAIL] node not found (required for decl editor tests)"; exit 1 }
-$jsTests = @("decl_overlay_test.js", "decl_index_order_test.js", "asset_browser_test.js")
+$jsTests = @("decl_overlay_test.js", "decl_index_order_test.js", "asset_browser_test.js", "entity_list_test.js")
 foreach ($jsTest in $jsTests) {
     & $node.Source (Join-Path $here $jsTest)
     if ($LASTEXITCODE -ne 0) { Write-Host "[FAIL] $jsTest (exit $LASTEXITCODE)"; exit 1 }

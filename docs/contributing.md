@@ -165,7 +165,8 @@ By default this compiles and runs 23 **self-contained native tests** (no game ne
   page lookup without retained shard tables.
 - **`serialization_buffer_test`** — timeline growth, terminal failures, retained capacity, and the 32 MB cap.
 
-The same command then runs three JavaScript contract tests for the declaration editor and asset browser.
+The same command then runs four JavaScript contract tests for the declaration editor, asset browser,
+and bounded Entities-list rendering.
 
 Two more tests scan a **real DOOM image** — a `DOOMx64vk.exe` that's been unpacked from its Steam DRM wrapper
 (e.g. with Steamless). **Running these is REQUIRED if you add or change any entry in the engine signature

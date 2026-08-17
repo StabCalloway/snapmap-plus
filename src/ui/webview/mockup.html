@@ -212,6 +212,10 @@
   .panel-body.pad { padding: 10px; }
   .list { padding: 3px; }
   .entity-item { padding: 3px 7px; border-radius: 4px; color: var(--link); white-space: nowrap; cursor: default; line-height: 1.45; }
+  /* The Entities pane is windowed. Its spacers depend on this exact 22 px row pitch; scoped here so
+     the shared .entity-item skeleton used by Timelines and Assets keeps its existing natural height. */
+  #entityList .entity-item { height: 22px; box-sizing: border-box; }
+  #entityList .entity-window-spacer { pointer-events: none; }
   .entity-item .name { color: var(--text); }
   .entity-item.hidden-ent { color: var(--muted); font-style: italic; }
   .entity-item.hidden-ent .name { color: var(--muted); }
@@ -818,7 +822,13 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 <script src="schema_slice.js"></script>
 <script>
   var allEntities = [];      // last list from backend
-  var visibleEids = [];      // eids currently rendered (in order)
+  var visibleEntities = [];  // full filtered logical list; only a bounded window is mounted in the DOM
+  var visibleEids = [];      // eids in the full filtered logical list (range/keyboard order)
+  var entityWindowStart = 0, entityWindowEnd = 0;
+  var entityScrollQueued = false;
+  var ENTITY_ROW_HEIGHT = 22;
+  var ENTITY_WINDOW_ROWS = 128;
+  var ENTITY_WINDOW_STEP = 32;
   var selectedEids = {};     // set of selected eids
   var primaryEid = -1;       // anchor shown in the state editor
   var anchorEid = -1;        // shift-range anchor
@@ -2401,7 +2411,51 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   // under instead.
   function isFilterUtilityEntity(e) { return !!(e && e.id && e.id.indexOf('snapmaps/filter/') === 0); }
 
+  function uiPerfNow() {
+    return window.performance && typeof window.performance.now === 'function'
+      ? window.performance.now() : Date.now();
+  }
+
+  /* Return the bounded slice to mount for a logical list and scroll position. The 32-row stepping
+     leaves a full viewport of overscan on this fixed 900 px canvas, so ordinary wheel scrolling does
+     not rebuild the window every row. At most 128 entity rows exist in the DOM at any time. */
+  function entityWindowBounds(total, scrollTop) {
+    if (total <= 0) return {start:0, end:0};
+    var first = Math.max(0, Math.floor(scrollTop / ENTITY_ROW_HEIGHT));
+    var block = Math.floor(first / ENTITY_WINDOW_STEP) * ENTITY_WINDOW_STEP;
+    var start = Math.max(0, block - ENTITY_WINDOW_STEP);
+    if (start + ENTITY_WINDOW_ROWS > total) start = Math.max(0, total - ENTITY_WINDOW_ROWS);
+    return {start:start, end:Math.min(total, start + ENTITY_WINDOW_ROWS)};
+  }
+
+  function entityRowHtml(e) {
+    var cls = 'entity-item'+(e.hidden?' hidden-ent':'')+(selectedEids[e.eid]?' selected':'');
+    var label = e.name ? (': <span class="name">'+esc(e.name)+'</span>') : '';
+    return '<div class="'+cls+'" data-eid="'+e.eid+'">'+esc(e.id)+label+'</div>';
+  }
+
+  function renderEntityWindow(force) {
+    var listEl = document.getElementById('entityList');
+    var b = entityWindowBounds(visibleEntities.length, listEl.scrollTop);
+    if (!force && b.start === entityWindowStart && b.end === entityWindowEnd)
+      return {mounted:b.end-b.start};
+
+    var html = '';
+    if (b.start > 0)
+      html += '<div class="entity-window-spacer" aria-hidden="true" style="height:' +
+              (b.start * ENTITY_ROW_HEIGHT) + 'px"></div>';
+    for (var i=b.start; i<b.end; i++) html += entityRowHtml(visibleEntities[i]);
+    if (b.end < visibleEntities.length)
+      html += '<div class="entity-window-spacer" aria-hidden="true" style="height:' +
+              ((visibleEntities.length - b.end) * ENTITY_ROW_HEIGHT) + 'px"></div>';
+    listEl.innerHTML = html;
+    entityWindowStart = b.start; entityWindowEnd = b.end;
+    updateSelCount();
+    return {mounted:b.end-b.start};
+  }
+
   function renderList() {
+    var started = uiPerfNow();
     var listEl = document.getElementById('entityList');
     var showHidden = document.getElementById('showHidden').checked;
     var filter = document.getElementById('filterBox').value.toLowerCase();
@@ -2411,27 +2465,23 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     vis = vis.filter(function(e){ return !isFilterUtilityEntity(e); });
     var rows = vis.filter(function(e){ return !filter || e.id.toLowerCase().indexOf(filter)!==-1 || (e.name && e.name.toLowerCase().indexOf(filter)!==-1); });
 
+    visibleEntities = rows;
     visibleEids = rows.map(function(e){return e.eid;});
     document.getElementById('entBadge').textContent = rows.length;   // panel-header count: rows actually shown
     if (rows.length === 0) {
+      entityWindowStart = entityWindowEnd = 0;
       listEl.innerHTML = '<div class="list-empty">'+(allEntities.length===0?'No entities (open a map in the SnapMap editor).':'No matches.')+'</div>';
-      return;
+      updateSelCount();
+      return {matched:0, mounted:0, ms:uiPerfNow()-started};
     }
-    var html = '';
-    for (var i=0;i<rows.length;i++) {
-      var e = rows[i];
-      var cls = 'entity-item'+(e.hidden?' hidden-ent':'')+(selectedEids[e.eid]?' selected':'');
-      var label = e.name ? (': <span class="name">'+esc(e.name)+'</span>') : '';
-      html += '<div class="'+cls+'" data-eid="'+e.eid+'">'+esc(e.id)+label+'</div>';
+    var windowPerf = renderEntityWindow(true);
+    /* Replacing the window should not move the user's logical position. If Chromium clamped the
+       scroll offset while the DOM was replaced, restore it and remount the corresponding slice. */
+    if (listEl.scrollTop !== scroll) {
+      listEl.scrollTop = scroll;
+      windowPerf = renderEntityWindow(false);
     }
-    listEl.innerHTML = html;
-    listEl.scrollTop = scroll;
-    var items = listEl.querySelectorAll('.entity-item');
-    for (var j=0;j<items.length;j++) {
-      items[j].addEventListener('mousedown', onRowMouseDown);
-      items[j].addEventListener('contextmenu', onRowContext);
-    }
-    updateSelCount();
+    return {matched:rows.length, mounted:windowPerf.mounted, ms:uiPerfNow()-started};
   }
 
   function renderTimelineList() {
@@ -3226,6 +3276,17 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   // Move the single row selection to the next/previous VISIBLE row (post-filter, respects Show Hidden),
   // same effect as clicking that row. delta is +1 (ArrowDown) or -1 (ArrowUp). No current selection ->
   // ArrowDown lands on the first row, ArrowUp on the last (matches a fresh <select>'s first-keypress feel).
+  function ensureEntityIndexVisible(index) {
+    var listEl = document.getElementById('entityList');
+    var height = Math.max(listEl.clientHeight, ENTITY_ROW_HEIGHT);
+    var rowTop = index * ENTITY_ROW_HEIGHT, rowBottom = rowTop + ENTITY_ROW_HEIGHT;
+    if (rowTop < listEl.scrollTop) listEl.scrollTop = rowTop;
+    else if (rowBottom > listEl.scrollTop + height) listEl.scrollTop = rowBottom - height;
+    /* The scroll listener is animation-frame coalesced. Mount synchronously for keyboard selection so
+       updateSelDom below can mark the destination row in the same input event. */
+    renderEntityWindow(false);
+  }
+
   function moveEntitySelection(delta) {
     if (!visibleEids.length) return;
     var idx = (primaryEid !== -1) ? visibleEids.indexOf(primaryEid) : -1;
@@ -3233,10 +3294,9 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
                              : Math.min(visibleEids.length - 1, Math.max(0, idx + delta));
     var newEid = visibleEids[next];
     selectedEids = {}; selectedEids[newEid] = true; anchorEid = newEid; primaryEid = newEid;
+    ensureEntityIndexVisible(next);
     updateSelDom();
     refreshEditorForSelection();
-    var row = document.querySelector('#entityList .entity-item[data-eid="' + newEid + '"]');
-    if (row) row.scrollIntoView({block: 'nearest'});
   }
 
   // ---- context menu ----
@@ -3265,7 +3325,23 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   function hideCtx() { ctx.style.display = 'none'; }
   document.addEventListener('mousedown', function(e){ if (!ctx.contains(e.target)) hideCtx(); });
   document.addEventListener('keydown', function(e){ if (e.key==='Escape') hideCtx(); });
-  document.getElementById('entityList').addEventListener('scroll', hideCtx);
+  /* Entity rows are replaced as the virtual window moves. Delegate once from the stable scroller
+     instead of allocating two listeners for every entity on every list publication. */
+  var entityListEl = document.getElementById('entityList');
+  entityListEl.addEventListener('mousedown', function(ev){
+    var row = ev.target.closest ? ev.target.closest('.entity-item') : null;
+    if (row) onRowMouseDown.call(row, ev);
+  });
+  entityListEl.addEventListener('contextmenu', function(ev){
+    var row = ev.target.closest ? ev.target.closest('.entity-item') : null;
+    if (row) onRowContext.call(row, ev);
+  });
+  entityListEl.addEventListener('scroll', function(){
+    hideCtx();
+    if (entityScrollQueued) return;
+    entityScrollQueued = true;
+    requestAnimationFrame(function(){ entityScrollQueued = false; renderEntityWindow(false); });
+  });
 
   // ---- state editor ----
   function showPlaceholder(html) {
@@ -3454,6 +3530,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       else if (d.flags & 4)
         toast("Settings couldn't be saved; changes apply only for this session.", 'warn');
     } else if (d.kind === 'list') {
+      var listStarted = uiPerfNow();
       document.getElementById('bridgeDot').className = 'dot ok';
       appVersion = d.version || '';   // rides along in feedback reports
       document.getElementById('verText').textContent = 'Snapmap+ ' + (d.version || '');
@@ -3463,11 +3540,17 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       // drop selections for entities that no longer exist
       var exist = {}; for (var i=0;i<allEntities.length;i++) exist[allEntities[i].eid]=true;
       for (var k in selectedEids) if (selectedEids[k] && !exist[k]) delete selectedEids[k];
-      renderList();
+      var entityPerf = renderList();
       allTimelines = d.timelines || [];
       var tlExist = {}; for (var ti=0; ti<allTimelines.length; ti++) tlExist[allTimelines[ti].eid] = true;
       if (selectedTlEid !== -1 && !tlExist[selectedTlEid]) selectedTlEid = -1;
       renderTimelineList();
+      /* One small acknowledgement per list publication gives the native log both sides of the bridge.
+         It is intentionally event-driven (never part of the 330 ms unchanged-list poll). */
+      post({cmd:'perfList', seq:(typeof d.seq === 'number' ? d.seq : 0),
+            entities:allEntities.length, matched:entityPerf.matched, mounted:entityPerf.mounted,
+            renderMs:Math.round(entityPerf.ms * 1000) / 1000,
+            handlerMs:Math.round((uiPerfNow() - listStarted) * 1000) / 1000});
     } else if (d.kind === 'editorReopened') {
       // the SnapMap editor screen just came back (Play ended, or a map load/reload just completed) --
       // force EVERY panel that caches loaded-then-editable entity state closed, so nobody edits/saves

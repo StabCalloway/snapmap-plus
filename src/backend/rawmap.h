@@ -68,9 +68,13 @@ int sh_rawmap_swap_is_armed(void);
  * to reset to the default path. The real source is wired later. Returns 1 if a path is set. */
 int sh_rawmap_swap_set_source(const char *path);
 
-/* How many times the swap has fired (substituted our bytes into a load). Observability for the
- * test harness. */
+/* How many times the swap has fired (substituted our bytes into a load). */
 unsigned long sh_rawmap_swap_count(void);
+
+/* How many substituted DeserializeFromJson calls have RETURNED. Exported by name and at ordinal 101
+ * so the test harness can distinguish a completed in-place load even when the engine reuses the
+ * idSnapMap pointer and emits no completion line. */
+unsigned long sh_rawmap_swap_complete_count(void);
 
 /* rawmap.h -- the rawmap SAVE shadow, native C
  * (port of OG's SerializeToJson detour FUN_180023e60 -- the INVERSE of the LOAD swap sh_rawmap_swap).

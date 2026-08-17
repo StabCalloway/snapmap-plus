@@ -16,6 +16,7 @@
 ; corruption bug waiting to happen -- an explicit high ordinal cannot.
 EXPORTS
     sh_rawmap_swap_is_armed         @100
+    sh_rawmap_swap_complete_count   @101
     XInputGetState                  @2
     XInputSetState                  @3
     XInputGetCapabilities           @4

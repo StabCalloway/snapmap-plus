@@ -41,6 +41,7 @@ static deser_fn_t g_deser_orig = NULL;   /* the trampoline -> the real engine De
 /* Gate (OG DAT_18003e819 / the reference impl _gate). Default DISARMED -- the test harness arms for the test. */
 static volatile LONG g_gate = 0;
 static volatile LONG g_swap_count = 0;
+static volatile LONG g_swap_complete_count = 0;
 
 /* File-backed rawmap source. Default %LOCALAPPDATA%\snapmap-plus\rawmap.json (the OG read
  * %USERPROFILE%\snaphak\rawmap.json). The test harness may override via sh_rawmap_swap_set_source. */
@@ -175,6 +176,7 @@ static int sh_deser_detour(const char *json, void *out_map)
                 flag_armed ? " [flag-armed]" : "");
             backend_log(line);
             int rc = g_deser_orig(ours, out_map);   /* engine parses OUR bytes (overwrite of param_1) */
+            InterlockedIncrement(&g_swap_complete_count); /* only after the substituted parse returns */
             HeapFree(GetProcessHeap(), 0, ours);     /* OG frees its substitute buffer too */
             return rc;
         }
@@ -264,6 +266,11 @@ int sh_rawmap_swap_set_source(const char *path)
 unsigned long sh_rawmap_swap_count(void)
 {
     return (unsigned long)InterlockedCompareExchange(&g_swap_count, 0, 0);
+}
+
+unsigned long sh_rawmap_swap_complete_count(void)
+{
+    return (unsigned long)InterlockedCompareExchange(&g_swap_complete_count, 0, 0);
 }
 
 /* ==== merged: SAVE shadow (was rawmap.c) ==== */

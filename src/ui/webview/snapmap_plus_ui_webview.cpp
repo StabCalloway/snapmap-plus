@@ -189,6 +189,17 @@ static PocEnt *g_ents = nullptr;
 struct PocTl { int eid; char id[POC_ID_CAP]; char name[POC_NAME_CAP]; };
 static PocTl *g_tls = nullptr;
 static int    g_tl_count = 0;
+static unsigned long g_list_seq = 0;
+
+struct PocCollectPerf {
+    unsigned calls, state_calls;
+    unsigned long long collect_total_us, collect_max_us;
+    unsigned long long poll_total_us, poll_max_us;
+    unsigned long long selection_total_us, selection_max_us;
+    unsigned long long state_total_us, state_max_us;
+    int min_entities, max_entities, max_selection_count;
+};
+static PocCollectPerf g_collect_perf = {};
 
 /* ------------------------------------------------------------------ tiny file log ------------------ */
 static void poc_log(const char *msg)
@@ -198,11 +209,96 @@ static void poc_log(const char *msg)
     FILE *f = nullptr;
     if (fopen_s(&f, "snapmap-plus\\logs\\webview_poc.log", "a") == 0 && f) {
         SYSTEMTIME t; GetLocalTime(&t);
-        fprintf(f, "[%02d:%02d:%02d] %s\n", t.wHour, t.wMinute, t.wSecond, msg);
+        fprintf(f, "[%02d:%02d:%02d.%03d] %s\n",
+                t.wHour, t.wMinute, t.wSecond, t.wMilliseconds, msg);
         fclose(f);
     }
 }
 static void poc_logf(const char *fmt, unsigned long a) { char l[256]; _snprintf_s(l, sizeof l, _TRUNCATE, fmt, a); poc_log(l); }
+
+static unsigned long long poc_perf_now_us()
+{
+    static LARGE_INTEGER freq = []() { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return f; }();
+    LARGE_INTEGER now; QueryPerformanceCounter(&now);
+    if (freq.QuadPart <= 0) return 0;
+    unsigned long long ticks = (unsigned long long)now.QuadPart;
+    unsigned long long hz = (unsigned long long)freq.QuadPart;
+    return (ticks / hz) * 1000000ull + ((ticks % hz) * 1000000ull) / hz;
+}
+
+static void poc_perf_flush_collect(const char *reason)
+{
+    if (g_collect_perf.calls == 0) return;
+    char l[512];
+    _snprintf_s(l, sizeof l, _TRUNCATE,
+                "perf poll-window: end=%s calls=%u entities=%d..%d selected_max=%d total_avg_us=%llu total_max_us=%llu collect_avg_us=%llu collect_max_us=%llu selection_avg_us=%llu selection_max_us=%llu state_calls=%u state_avg_us=%llu state_max_us=%llu",
+                reason ? reason : "unknown", g_collect_perf.calls,
+                g_collect_perf.min_entities, g_collect_perf.max_entities,
+                g_collect_perf.max_selection_count,
+                g_collect_perf.poll_total_us / g_collect_perf.calls, g_collect_perf.poll_max_us,
+                g_collect_perf.collect_total_us / g_collect_perf.calls, g_collect_perf.collect_max_us,
+                g_collect_perf.selection_total_us / g_collect_perf.calls, g_collect_perf.selection_max_us,
+                g_collect_perf.state_calls,
+                g_collect_perf.state_calls ? g_collect_perf.state_total_us / g_collect_perf.state_calls : 0,
+                g_collect_perf.state_max_us);
+    poc_log(l);
+    g_collect_perf = {};
+}
+
+static void poc_perf_note_collect(unsigned long long us, int entities, const char *reason)
+{
+    if (!reason || strcmp(reason, "poll") != 0) {
+        char l[192];
+        _snprintf_s(l, sizeof l, _TRUNCATE,
+                    "perf collect: reason=%s entities=%d duration_us=%llu",
+                    reason ? reason : "unknown", entities, us);
+        poc_log(l);
+        return;
+    }
+
+    if (g_collect_perf.calls == 0) {
+        g_collect_perf.min_entities = entities;
+        g_collect_perf.max_entities = entities;
+    } else {
+        if (entities < g_collect_perf.min_entities) g_collect_perf.min_entities = entities;
+        if (entities > g_collect_perf.max_entities) g_collect_perf.max_entities = entities;
+    }
+    g_collect_perf.calls++;
+    g_collect_perf.collect_total_us += us;
+    if (us > g_collect_perf.collect_max_us) g_collect_perf.collect_max_us = us;
+    if (us >= 5000) {
+        char l[160];
+        _snprintf_s(l, sizeof l, _TRUNCATE,
+                    "perf collect-slow: entities=%d duration_us=%llu", entities, us);
+        poc_log(l);
+    }
+}
+
+static void poc_perf_note_poll(unsigned long long total_us, unsigned long long collect_us,
+                               unsigned long long selection_us, unsigned long long state_us,
+                               bool state_called, int entities, int selection_count)
+{
+    g_collect_perf.poll_total_us += total_us;
+    if (total_us > g_collect_perf.poll_max_us) g_collect_perf.poll_max_us = total_us;
+    g_collect_perf.selection_total_us += selection_us;
+    if (selection_us > g_collect_perf.selection_max_us) g_collect_perf.selection_max_us = selection_us;
+    if (state_called) {
+        g_collect_perf.state_calls++;
+        g_collect_perf.state_total_us += state_us;
+        if (state_us > g_collect_perf.state_max_us) g_collect_perf.state_max_us = state_us;
+    }
+    if (selection_count > g_collect_perf.max_selection_count)
+        g_collect_perf.max_selection_count = selection_count;
+    if (total_us >= 10000) {
+        char l[256];
+        _snprintf_s(l, sizeof l, _TRUNCATE,
+                    "perf poll-slow: entities=%d selected=%d total_us=%llu collect_us=%llu selection_us=%llu state_us=%llu",
+                    entities, selection_count, total_us, collect_us, selection_us,
+                    state_called ? state_us : 0);
+        poc_log(l);
+    }
+    if (g_collect_perf.calls >= 90) poc_perf_flush_collect("30-second-window");
+}
 
 /* ------------------------------------------------------------------ hashing (change signatures) ---- */
 static uint64_t hstr(uint64_t h, const char *s) { while (*s) { h = (h ^ (unsigned char)*s) * 1099511628211ull; s++; } return h; }
@@ -456,6 +552,17 @@ static int poc_collect(int *out_ready)
     } __except (EXCEPTION_EXECUTE_HANDLER) { }
     return n;
 }
+static int poc_collect_timed(int *out_ready, const char *reason,
+                             unsigned long long *elapsed_us = nullptr)
+{
+    unsigned long long started = poc_perf_now_us();
+    int n = poc_collect(out_ready);
+    unsigned long long finished = poc_perf_now_us();
+    unsigned long long elapsed = finished >= started ? finished - started : 0;
+    if (elapsed_us) *elapsed_us = elapsed;
+    poc_perf_note_collect(elapsed, n, reason);
+    return n;
+}
 /* Rescan g_ents[0..n) for Timelines and refill g_tls/g_tl_count. Called ONLY when the cheap entities-list
  * signature just changed (mirrors the OG sh_rebuild_entity_list cadence -- NOT a fixed timer). Reads the
  * classname of EVERY entity, exactly like the OG populate_one_entity (sh_tabs.cpp), and dual-adds any
@@ -500,6 +607,18 @@ static void poc_rescan_timelines(int n)
         }
     }
     g_tl_count = tn;
+}
+static void poc_rescan_timelines_timed(int n, const char *reason)
+{
+    unsigned long long started = poc_perf_now_us();
+    poc_rescan_timelines(n);
+    unsigned long long finished = poc_perf_now_us();
+    char l[224];
+    _snprintf_s(l, sizeof l, _TRUNCATE,
+                "perf timeline-rescan: reason=%s entities=%d timelines=%d duration_us=%llu",
+                reason ? reason : "unknown", n, g_tl_count,
+                finished >= started ? finished - started : 0);
+    poc_log(l);
 }
 static bool poc_collect_state(int id, char *decl, int dcap, char *cls, int ccap, char *inh, int icap, char *dnm, int ncap)
 {
@@ -1174,11 +1293,14 @@ static uint64_t poc_list_sig(int n)
     for (int i = 0; i < n; i++) { h = hint(h, g_ents[i].eid); h = hstr(h, g_ents[i].id); h = hstr(h, g_ents[i].name); h = hint(h, g_ents[i].hidden); }
     return h ^ (uint64_t)n;
 }
-static void poc_emit_list(int n, int ready)
+static void poc_emit_list(int n, int ready, const char *reason)
 {
     if (!g_webview || !g_ents) return;
+    unsigned long long started = poc_perf_now_us();
+    unsigned long seq = ++g_list_seq;
     std::wstring json; json.reserve((size_t)(n + g_tl_count) * 96 + 96);
-    json += L"{\"kind\":\"list\",\"version\":\""; json += poc_json_w(g_version.c_str());
+    json += L"{\"kind\":\"list\",\"seq\":"; json += std::to_wstring(seq);
+    json += L",\"version\":\""; json += poc_json_w(g_version.c_str());
     json += L"\",\"editorReady\":"; json += ready ? L"true" : L"false";
     json += L",\"count\":"; json += std::to_wstring(n);
     json += L",\"entities\":[";
@@ -1199,17 +1321,26 @@ static void poc_emit_list(int n, int ready)
         json += L"\"}";   /* close the "name" string BEFORE the object brace (the missing \" was the empty-list bug) */
     }
     json += L"]}";
-    g_webview->PostWebMessageAsJson(json.c_str());
+    unsigned long long built = poc_perf_now_us();
+    HRESULT hr = g_webview->PostWebMessageAsJson(json.c_str());
+    unsigned long long posted = poc_perf_now_us();
+    char l[320];
+    _snprintf_s(l, sizeof l, _TRUNCATE,
+                "perf list-emit: seq=%lu reason=%s entities=%d timelines=%d json_chars=%llu build_us=%llu post_us=%llu hr=0x%08lx",
+                seq, reason ? reason : "unknown", n, g_tl_count,
+                (unsigned long long)json.size(), built >= started ? built - started : 0,
+                posted >= built ? posted - built : 0, (unsigned long)hr);
+    poc_log(l);
 }
-static void poc_send_list()
+static void poc_send_list(const char *reason)
 {
-    int ready = 0; int n = poc_collect(&ready);
+    int ready = 0; int n = poc_collect_timed(&ready, reason);
     uint64_t sig = poc_list_sig(n);
     /* the one get_classname_copy call site (the Timeline rescan) rides the SAME "did the cheap entities
      * signature change" gate as the OG's sh_rebuild_entity_list -- not a fixed timer. */
-    if (sig != g_last_list_sig) poc_rescan_timelines(n);
+    if (sig != g_last_list_sig) poc_rescan_timelines_timed(n, reason);
     g_last_list_sig = sig;
-    poc_emit_list(n, ready);
+    poc_emit_list(n, ready, reason);
 }
 static void poc_send_state(int id, bool autoflag)
 {
@@ -2154,7 +2285,27 @@ static HRESULT on_message(ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventA
         std::wstring cmd;
         if (json_get_wstr(json, L"cmd", cmd)) {
             if (cmd == L"refresh") {
-                poc_send_list();
+                poc_send_list("manual-refresh");
+            } else if (cmd == L"perfList") {
+                int seq = 0, entities = 0, matched = 0, mounted = 0;
+                double render_ms = 0.0, handler_ms = 0.0;
+                if (json_get_int(json, L"seq", &seq) &&
+                    json_get_int(json, L"entities", &entities) &&
+                    json_get_int(json, L"matched", &matched) &&
+                    json_get_int(json, L"mounted", &mounted) &&
+                    json_get_double(json, L"renderMs", &render_ms) &&
+                    json_get_double(json, L"handlerMs", &handler_ms) &&
+                    seq >= 0 && entities >= 0 && entities <= POC_MAX_ENTS &&
+                    matched >= 0 && matched <= entities && mounted >= 0 && mounted <= matched &&
+                    std::isfinite(render_ms) && std::isfinite(handler_ms) &&
+                    render_ms >= 0.0 && render_ms <= 600000.0 &&
+                    handler_ms >= 0.0 && handler_ms <= 600000.0) {
+                    char l[256];
+                    _snprintf_s(l, sizeof l, _TRUNCATE,
+                                "perf ui-list: seq=%d entities=%d matched=%d mounted=%d render_ms=%.3f handler_ms=%.3f",
+                                seq, entities, matched, mounted, render_ms, handler_ms);
+                    poc_log(l);
+                }
             } else if (cmd == L"listPrefabs") {
                 poc_send_prefabs();
             } else if (cmd == L"selectPrefab") {
@@ -2433,7 +2584,7 @@ static HRESULT on_nav_completed(ICoreWebView2 *,
     g_page_loaded = true;
     g_webview_ready = true;
     poc_post_config_status();
-    poc_send_list();
+    poc_send_list("navigation-completed");
     return S_OK;
 }
 static HRESULT on_controller_created(HRESULT result, ICoreWebView2Controller *controller)
@@ -2534,10 +2685,10 @@ static void poc_think_loop()
         if (did_save) {
             wchar_t m[80]; _snwprintf_s(m, _countof(m), _TRUNCATE, L"{\"kind\":\"saveResult\",\"result\":%d}", g_save_result);
             poc_post_json(m);
-            poc_send_list();
+            poc_send_list("save");
             if (g_save_eid >= 0) poc_send_state(g_save_eid, false);
         }
-        if (did_delete) poc_send_list();
+        if (did_delete) poc_send_list("delete");
         if (did_select_refused) poc_post_json(L"{\"kind\":\"selectRefused\"}");
         if (did_create_prefab) {
             std::wstring m = L"{\"kind\":\"createPrefabResult\",\"result\":"; m += std::to_wstring(g_create_result);
@@ -2685,7 +2836,12 @@ static void poc_think_loop()
         if (g_webview_ready) {
             bool ready = poc_editor_ready() != 0;
             if (ready && !was_visible) {
-                ShowWindow(g_hwnd, SW_SHOW); UpdateWindow(g_hwnd); poc_send_list();
+                char l[128];
+                _snprintf_s(l, sizeof l, _TRUNCATE,
+                            "perf lifecycle: editor-visible frame=%u", frame);
+                poc_log(l);
+                ShowWindow(g_hwnd, SW_SHOW); UpdateWindow(g_hwnd);
+                poc_send_list("editor-visible");
                 /* the editor screen just came back (Play just ended, or a map load/reload just completed --
                  * editor_ready_poll (+0x88) is 1 in either case, 0 in the HUB/menu/Play). The webview host
                  * window + its DOM/JS state are only HIDDEN across that gap, never destroyed, so any Timeline
@@ -2695,22 +2851,28 @@ static void poc_think_loop()
                 poc_post_json(L"{\"kind\":\"editorReopened\"}");
                 was_visible = true;
             }
-            else if (!ready && was_visible) { ShowWindow(g_hwnd, SW_HIDE); was_visible = false; }
+            else if (!ready && was_visible) {
+                poc_perf_flush_collect("editor-hidden");
+                poc_log("perf lifecycle: editor-hidden");
+                ShowWindow(g_hwnd, SW_HIDE); was_visible = false;
+            }
 
             /* periodic auto tasks (~ every 10 frames = ~330 ms): list change poll, editor-selection sync,
              * displayed-state change poll. All emit only on an actual change. */
             if (was_visible && (frame % 10 == 0)) {
-                int rdy = 0; int n = poc_collect(&rdy);
+                unsigned long long poll_started = poc_perf_now_us(), collect_us = 0;
+                int rdy = 0; int n = poc_collect_timed(&rdy, "poll", &collect_us);
                 uint64_t sig = poc_list_sig(n);
                 if (sig != g_last_list_sig) {
-                    poc_rescan_timelines(n);   /* the one classname call site -- change-gated, not a fixed timer */
+                    poc_rescan_timelines_timed(n, "entity-change");   /* change-gated, not a fixed timer */
                     g_last_list_sig = sig;
-                    poc_emit_list(n, rdy);
+                    poc_emit_list(n, rdy, "entity-change");
                 }
 
                 /* live editor-selection COUNT, independent of "Follow editor selection" -- the Prefabs tab's
                  * "Create from selection (N)" button needs this regardless of sync mode. POC_MAX_ENTS (not
                  * a fresh 64-cap) since a selection can't exceed the total entity list, already capped there. */
+                unsigned long long selection_started = poc_perf_now_us();
                 static int selids[POC_MAX_ENTS];
                 int sn = poc_get_selection(selids, POC_MAX_ENTS);
                 if (sn != g_last_selcount) {
@@ -2720,7 +2882,7 @@ static void poc_think_loop()
                 }
                 if (g_sync_on) {
                     /* mirror the WHOLE editor selection (any N) into the list, only when it changes. */
-                    for (int a = 1; a < sn; a++) { int v = selids[a]; int b = a - 1; while (b >= 0 && selids[b] > v) { selids[b+1] = selids[b]; b--; } selids[b+1] = v; }
+                    std::sort(selids, selids + sn);
                     uint64_t sig = 1469598103934665603ull;
                     for (int a = 0; a < sn; a++) sig = hint(sig, selids[a]);
                     sig ^= (uint64_t)sn;
@@ -2733,8 +2895,18 @@ static void poc_think_loop()
                         if (sn == 1) g_displayed_eid = selids[0];
                     }
                 }
-                if (g_displayed_eid >= 0) poc_send_state(g_displayed_eid, true);
+                unsigned long long selection_finished = poc_perf_now_us();
+                bool state_called = g_displayed_eid >= 0;
+                unsigned long long state_started = selection_finished;
+                if (state_called) poc_send_state(g_displayed_eid, true);
+                unsigned long long state_finished = poc_perf_now_us();
                 if (!g_cam_lock) poc_cam_read_send();   /* live camera readout (unless locked) */
+                unsigned long long poll_finished = poc_perf_now_us();
+                poc_perf_note_poll(poll_finished >= poll_started ? poll_finished - poll_started : 0,
+                                   collect_us,
+                                   selection_finished >= selection_started ? selection_finished - selection_started : 0,
+                                   state_finished >= state_started ? state_finished - state_started : 0,
+                                   state_called, n, sn);
             }
         }
 
