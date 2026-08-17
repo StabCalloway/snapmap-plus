@@ -135,6 +135,19 @@ if ($slice.IndexOf('</script') -ge 0) { throw "schema_slice.js contains '</scrip
 $html = $html.Replace($sliceTag, "<script>`n$slice</script>")
 if ($html.IndexOf($sliceTag) -ge 0) { throw "schema_slice.js inlining left a residual src tag -- duplicate tag in mockup.html?" }
 
+# Inline the Prefab Details WebGL viewport for the same NavigateToString reason. Keeping the renderer in
+# its own source file makes the sizeable math/input/resource transport unit independently testable while
+# the shipped page remains one embedded document.
+$prefabViewportPath = Join-Path $here "webview\prefab_viewport.js"
+$prefabViewportTag  = '<script src="prefab_viewport.js"></script>'
+if (-not (Test-Path $prefabViewportPath)) { throw "prefab_viewport.js not found at $prefabViewportPath -- required" }
+if ($html.IndexOf($prefabViewportTag) -lt 0) { throw "mockup.html does not contain $prefabViewportTag -- cannot inline prefab viewport" }
+$prefabViewport = Get-Content -Raw -Path $prefabViewportPath
+if ($prefabViewport.IndexOf(')SNAPMAPPLUS') -ge 0) { throw "prefab_viewport.js contains the raw-literal delimiter )SNAPMAPPLUS -- cannot embed" }
+if ($prefabViewport.IndexOf('</script') -ge 0) { throw "prefab_viewport.js contains '</script' -- would terminate the inline script tag early" }
+$html = $html.Replace($prefabViewportTag, "<script>`n$prefabViewport</script>")
+if ($html.IndexOf($prefabViewportTag) -ge 0) { throw "prefab_viewport.js inlining left a residual src tag" }
+
 # MSVC caps a single string literal at ~16 KB (error C2026). Split into <16 KB chunks emitted as
 # ADJACENT raw string literals -- the compiler concatenates them into one array. Raw literals need no
 # escaping; any byte is safe except the exact ")SNAPMAPPLUS" delimiter, which neither the HTML nor the
@@ -168,6 +181,7 @@ $libArgs = @(
     "`"$wvLib`"",
     "ole32.lib", "oleaut32.lib", "shell32.lib", "shlwapi.lib",
     "version.lib", "advapi32.lib", "user32.lib", "gdi32.lib",
+    "dwmapi.lib",  # one-pixel frame extension preserves the captionless window's shadow/rounded corners
     "winhttp.lib"   # the feedback dialog's single user-initiated POST (see the capability note in snapmap_plus_ui_webview.cpp)
 ) -join " "
 $implib = $Out -replace '\.dll$', '.lib'

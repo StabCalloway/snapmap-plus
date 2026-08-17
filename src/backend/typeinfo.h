@@ -81,6 +81,11 @@ int sh_typeinfo_class_derives(const char *className, const char *baseName);
  * lets users morph an entity to ANY class+inherit pair the engine would accept. */
 const char *sh_typeinfo_inherit_base(const char *inheritName, char *buf, size_t cap);
 
+/* Resolve the renderModelInfo.model inherited by an entityDef. Uses the same pure, read-locked
+ * entityDef lookup as sh_typeinfo_inherit_base, then scans the already-resolved decl text. No load,
+ * create, renderer, or GPU call. Copies the logical installed-model name and returns 1 on a hit. */
+int sh_typeinfo_inherit_model(const char *inheritName, char *buf, size_t cap);
+
 /* Enumerate the LIVE idlib reflection type registry -- every registered class NAME, not a frozen list.
  * RE'd from the engine (FindTypeInfoByName 0x1A1D590 + the registry builder/registrar all iterate one array).
  * Chain (reuses the already-wired reflect): reflect = declMgr->[+0x80]; container P = *(reflect+0); type-record

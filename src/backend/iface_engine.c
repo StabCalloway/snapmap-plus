@@ -35,6 +35,7 @@
 #include "imgpreview.h"      /* sh_imgpreview_list -- the Assets browser's installed-data catalogs */
 #include "megapreview.h"     /* sh_megapreview_rect -- the virtualmapping carrier's atlas rect */
 #include "soundpreview.h"    /* sh_soundpreview_play/stop -- auditioning a sound decl */
+#include "prefabpreview.h"   /* async installed geometry for the Prefab Details viewport */
 #include "valid_class_map.h" /* SH_VCM_* -- the class-dropdown static snapshot (used only if the live walk fails) */
 #include "wiring_cleandirect.h" /* sh_wiring_cleandirect_generation -- the wire-any connect-edit counter (+0x288) */
 #include "snapstack.h"          /* sh_snapstack_push_ids_backend -- the SnapStack stack push (+0x2A0) */
@@ -549,6 +550,38 @@ static void slot_sound_session(sh_iface *self, int on)
 {
     (void)self;
     sh_soundpreview_set_session(on);
+}
+
+/* +0x308..+0x318 (ext 20..22) Prefab Details preview bridge. Resolution is a pure, read-locked
+ * entityDef lookup. Mesh work is file-only and asynchronous; no renderer or game resource is retained
+ * by the frontend after the WebGL cache evicts it. */
+static int slot_resolve_prefab_model(sh_iface *self, const char *inherit_name,
+                                     char *out_model, int out_capacity)
+{
+    (void)self;
+    if (out_capacity <= 0) return 0;
+    /* A pickup-spawner entityDef can inherit a generic editor model in the live resolved text while
+     * its actual preview object is named by spawnerEntityPair.entityStatic in the installed decl.
+     * Prefer that file-only semantic route for spawners so the viewport shows the pickup, not its
+     * placement helper. JavaScript caches the result per inherit, so this read occurs only once. */
+    if (inherit_name && strstr(inherit_name, "spawner") &&
+        sh_prefabpreview_resolve_model(inherit_name, out_model, (size_t)out_capacity)) return 1;
+    if (sh_typeinfo_inherit_model(inherit_name, out_model, (size_t)out_capacity)) return 1;
+    /* Pickup spawners deliberately have no renderModelInfo of their own. Follow their installed
+     * spawnerEntityPair -> entityStatic -> inherited pickup model without loading an engine object. */
+    return sh_prefabpreview_resolve_model(inherit_name, out_model, (size_t)out_capacity);
+}
+
+static int slot_request_prefab_mesh(sh_iface *self, unsigned long generation, const char *model_name)
+{
+    (void)self;
+    return sh_prefabpreview_request(generation, model_name);
+}
+
+static int slot_get_prefab_mesh(sh_iface *self, void *out_blob, int out_capacity)
+{
+    (void)self;
+    return sh_prefabpreview_get(out_blob, out_capacity);
 }
 
 static void mode_set_selection_state(int state)
@@ -1352,6 +1385,9 @@ int sh_iface_engine_install(const sig_result *results, size_t n, const uint8_t *
     slots.material_rect           = slot_material_rect;              /* +0x2F0 ext 17 */
     slots.sound_preview           = slot_sound_preview;              /* +0x2F8 ext 18 */
     slots.sound_session           = slot_sound_session;              /* +0x300 ext 19 */
+    slots.resolve_prefab_model    = slot_resolve_prefab_model;       /* +0x308 ext 20 */
+    slots.request_prefab_mesh     = slot_request_prefab_mesh;        /* +0x310 ext 21 */
+    slots.get_prefab_mesh         = slot_get_prefab_mesh;            /* +0x318 ext 22 */
     sh_iface_bind_engine_slots(&slots);
 
     char line[200];

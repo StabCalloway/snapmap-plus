@@ -357,6 +357,15 @@ typedef int           (*sh_sound_preview_fn)(struct sh_iface *self, const char *
  * and resume to change, so they are established once per session rather than per click. */
 typedef void          (*sh_sound_session_fn)(struct sh_iface *self, int on);
 
+/* Prefab Details 3D preview. The first slot resolves an entityDef inherit to its logical model name
+ * through a pure decl lookup. The other two form an asynchronous installed-geometry queue: request is
+ * generation-keyed (empty name cancels stale work), get consumes one bounded binary completion. */
+typedef int (*sh_resolve_prefab_model_fn)(struct sh_iface *self, const char *inherit_name,
+                                          char *out_model, int out_capacity);
+typedef int (*sh_request_prefab_mesh_fn)(struct sh_iface *self, unsigned long generation,
+                                         const char *model_name);
+typedef int (*sh_get_prefab_mesh_fn)(struct sh_iface *self, void *out_blob, int out_capacity);
+
 /* +0x2B0/+0x2B8 (ext 9/10) backend-owned persistent configuration. Values cross the matched-pair
  * boundary as complete UTF-8 JSON fragments so future booleans/numbers/objects do not need new ABI
  * slots. `get` returns the required byte count excluding NUL; a NULL/zero buffer is a size query and an
@@ -575,6 +584,9 @@ typedef struct sh_iface_vtbl {
                                                       * NULL/empty name = stop */
     sh_sound_session_fn        sound_session;        /* +0x300 (ext 19) hold preview mode open
                                                       * while the browser is on screen */
+    sh_resolve_prefab_model_fn resolve_prefab_model; /* +0x308 (ext 20) entityDef inherit -> model */
+    sh_request_prefab_mesh_fn  request_prefab_mesh;  /* +0x310 (ext 21) async installed geometry */
+    sh_get_prefab_mesh_fn      get_prefab_mesh;      /* +0x318 (ext 22) consume geometry blob */
 } sh_iface_vtbl;
 
 SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, config_get_json) == 0x2B0);
@@ -588,7 +600,10 @@ SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, list_assets) == 0x2E8);
 SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, material_rect) == 0x2F0);
 SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, sound_preview) == 0x2F8);
 SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, sound_session) == 0x300);
-SH_STATIC_ASSERT(sizeof(sh_iface_vtbl) == 0x308);
+SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, resolve_prefab_model) == 0x308);
+SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, request_prefab_mesh) == 0x310);
+SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, get_prefab_mesh) == 0x318);
+SH_STATIC_ASSERT(sizeof(sh_iface_vtbl) == 0x320);
 
 /* ------------------------------------------------------------------ the interface object -----------
  * Object layout PINNED to FUN_1800229b1: +0x00 vtable, +0x08 mutex, +0x58 sub-object. The mutex is an
@@ -750,6 +765,9 @@ typedef struct sh_iface_engine_slots {
     sh_material_rect_fn        material_rect;               /* +0x2F0 (ext 17) */
     sh_sound_preview_fn        sound_preview;               /* +0x2F8 (ext 18) */
     sh_sound_session_fn        sound_session;               /* +0x300 (ext 19) */
+    sh_resolve_prefab_model_fn resolve_prefab_model;        /* +0x308 (ext 20) */
+    sh_request_prefab_mesh_fn  request_prefab_mesh;         /* +0x310 (ext 21) */
+    sh_get_prefab_mesh_fn      get_prefab_mesh;             /* +0x318 (ext 22) */
 } sh_iface_engine_slots;
 
 void sh_iface_bind_engine_slots(const sh_iface_engine_slots *slots);

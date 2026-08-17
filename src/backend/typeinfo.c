@@ -297,6 +297,92 @@ const char *sh_typeinfo_inherit_base(const char *inheritName, char *buf, size_t 
     } __except (EXCEPTION_EXECUTE_HANDLER) { buf[0] = '\0'; return NULL; }
 }
 
+/* idDeclEntityDef contains its resolved text idStr at +0x130, whose data pointer is +0x10 within
+ * that idStr. This is the same +0x140 read used by sh_dumpdef after it reaches an entity's decl. */
+#define DECL_RESOLVED_TEXT_OFF 0x140u
+#define DECL_RESOLVED_TEXT_CAP (4u * 1024u * 1024u)
+
+static int ti_word_char(unsigned char c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_';
+}
+
+static int ti_token_at(const char *text, size_t len, size_t at, const char *token)
+{
+    size_t n = strlen(token);
+    if (at + n > len || _strnicmp(text + at, token, n) != 0) return 0;
+    if (at && ti_word_char((unsigned char)text[at - 1])) return 0;
+    if (at + n < len && ti_word_char((unsigned char)text[at + n])) return 0;
+    return 1;
+}
+
+static int ti_model_from_resolved_text(const char *text, size_t len, char *out, size_t cap)
+{
+    size_t block_start = len, block_end = len;
+    for (size_t i = 0; i < len; ++i) {
+        if (!ti_token_at(text, len, i, "renderModelInfo")) continue;
+        size_t p = i + strlen("renderModelInfo");
+        while (p < len && text[p] != '{' && text[p] != '\n' && text[p] != '\r') ++p;
+        if (p >= len || text[p] != '{') continue;
+        block_start = p + 1;
+        int depth = 1, quote = 0, escape = 0;
+        for (++p; p < len; ++p) {
+            unsigned char c = (unsigned char)text[p];
+            if (quote) {
+                if (escape) escape = 0;
+                else if (c == '\\') escape = 1;
+                else if (c == '"') quote = 0;
+            } else if (c == '"') quote = 1;
+            else if (c == '{') depth++;
+            else if (c == '}' && --depth == 0) { block_end = p; break; }
+        }
+        if (block_end != len) break;
+    }
+    if (block_start >= block_end) return 0;
+
+    for (size_t i = block_start; i < block_end; ++i) {
+        if (!ti_token_at(text, block_end, i, "model")) continue;
+        size_t p = i + 5u;
+        while (p < block_end && (text[p] == ' ' || text[p] == '\t' || text[p] == '\r' || text[p] == '\n')) ++p;
+        if (p < block_end && text[p] == '=') {
+            ++p;
+            while (p < block_end && (text[p] == ' ' || text[p] == '\t' || text[p] == '\r' || text[p] == '\n')) ++p;
+        }
+        int quoted = p < block_end && text[p] == '"';
+        if (quoted) ++p;
+        size_t start = p;
+        while (p < block_end && ((quoted && text[p] != '"') ||
+               (!quoted && text[p] != ' ' && text[p] != '\t' && text[p] != '\r' &&
+                text[p] != '\n' && text[p] != ';' && text[p] != '}'))) ++p;
+        size_t n = p - start;
+        if (n > 0 && n < cap) {
+            memcpy(out, text + start, n); out[n] = '\0';
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int sh_typeinfo_inherit_model(const char *inheritName, char *buf, size_t cap)
+{
+    if (buf && cap) buf[0] = '\0';
+    if (!g_doom_base || !inheritName || !inheritName[0] || !buf || cap < 2) return 0;
+    __try {
+        typedef void *(*decl_find_fn)(void *ctx, const char *name);
+        void *ctx = (void *)(g_doom_base + RESOURCE_MGR_CTX_RVA);
+        decl_find_fn find = (decl_find_fn)(g_doom_base + DECL_PURE_FIND_RVA);
+        const uint8_t *decl = (const uint8_t *)find(ctx, inheritName);
+        if (!decl) return 0;
+        const char *text = *(const char * const *)(decl + DECL_RESOLVED_TEXT_OFF);
+        if (!text) return 0;
+        size_t len = 0;
+        while (len < DECL_RESOLVED_TEXT_CAP && text[len]) ++len;
+        if (len == 0 || len == DECL_RESOLVED_TEXT_CAP) return 0;
+        return ti_model_from_resolved_text(text, len, buf, cap);
+    } __except (EXCEPTION_EXECUTE_HANDLER) { buf[0] = '\0'; return 0; }
+}
+
 /* -------------------------------------------------- MATERIAL decl-find ------------------------------------
  * Resolves a MATERIAL decl by name using the SAME pure decl-find primitive as sh_typeinfo_inherit_base
  * above (DECL_PURE_FIND_RVA -- read-lock -> hash -> probe -> cached-decl-or-NULL -> unlock; no load/parse/

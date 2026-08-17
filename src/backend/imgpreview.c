@@ -196,7 +196,10 @@ static const struct { const char *type; unsigned len; unsigned char kind; const 
     /* `file` is a mixed bag -- .bimage, .tome, .sbsp, .ambientsh -- and only the .bswf half is worth
      * offering, so the suffix does the filtering the type cannot. See imgpreview_swf_name for why
      * the listed name is not the name stored here. */
-    { "file",                4, SH_ASSET_SWF,        ".bswf", 5 }
+    { "file",                4, SH_ASSET_SWF,        ".bswf", 5 },
+    /* Cooked MD6 geometry. An md6Def is the public logical model and names one of these rows through
+     * its `mesh` field. Keep the row addressable by exact name, but never expose it as a browser kind. */
+    { "baseModel",           9, SH_IMGPREVIEW_BASEMODEL_KIND, NULL, 0 }
 };
 #define KIND_COUNT ((int)(sizeof g_kinds / sizeof g_kinds[0]))
 
@@ -387,7 +390,7 @@ static int imgpreview_parse_box_index(int b, unsigned char *buf, size_t len)
          * decals, perks, and SWFs are neither listed nor previewed, so retaining 28,230 records
          * and their names for those types served no request. The SnapMap box remains complete. */
         if (b == 1 && kind != SH_ASSET_MATERIAL && kind != SH_ASSET_IMAGE &&
-            kind != SH_ASSET_SOUND)
+            kind != SH_ASSET_SOUND && kind != SH_IMGPREVIEW_BASEMODEL_KIND)
             continue;
 
         if ((g_recCount & 1023) == 0) {
@@ -1253,6 +1256,33 @@ static unsigned char *read_payload(const rec_t *r, size_t *out_len)
     free(raw);
     *out_len = n;
     return out;
+}
+
+int sh_imgpreview_read_payload(int kind, const char *name, size_t max_bytes,
+                               unsigned char **out_bytes, size_t *out_len)
+{
+    if (out_bytes) *out_bytes = NULL;
+    if (out_len) *out_len = 0;
+    if (!out_bytes || !out_len || !name || !name[0] || max_bytes == 0) return 0;
+
+    EnterCriticalSection(&g_lock);
+    int ok = 0;
+    if (imgpreview_load()) {
+        const rec_t *r = find_rec(name, kind);
+        if (r && r->usz > 0 && (size_t)r->usz <= max_bytes) {
+            size_t n = 0;
+            unsigned char *body = read_payload(r, &n);
+            if (body && n == (size_t)r->usz && n <= max_bytes) {
+                *out_bytes = body;
+                *out_len = n;
+                ok = 1;
+            } else {
+                free(body);
+            }
+        }
+    }
+    LeaveCriticalSection(&g_lock);
+    return ok;
 }
 
 /* --------------------------------------------------------------------- decl parse -------------

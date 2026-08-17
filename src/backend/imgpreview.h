@@ -40,4 +40,15 @@ int sh_imgpreview_list(int kind, unsigned start, char *out, size_t cap);
  * be good. sh_soundpreview_play is the caller that needs this. Returns 1 if present. */
 int sh_imgpreview_has(int kind, const char *name);
 
+/* Internal cooked-geometry record kind. It is intentionally outside SH_ASSET_*: baseModel rows are
+ * implementation payloads behind an md6Def, not names the Assets browser should offer directly. */
+#define SH_IMGPREVIEW_BASEMODEL_KIND 250
+
+/* Read one exact installed-resource payload by indexed kind/name. The caller owns *out_bytes and frees
+ * it with free(). `max_bytes` is a hard allocation/decompression ceiling; oversize and missing records
+ * fail without allocating. This is the read-only bridge used by the Prefab Details renderer, which
+ * decodes geometry lazily without copying any game asset into Snapmap+ itself. */
+int sh_imgpreview_read_payload(int kind, const char *name, size_t max_bytes,
+                               unsigned char **out_bytes, size_t *out_len);
+
 #endif /* BACKEND_IMGPREVIEW_H */

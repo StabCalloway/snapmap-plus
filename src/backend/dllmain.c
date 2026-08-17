@@ -34,6 +34,7 @@
 #include "typeinfo.h"
 #include "megapreview.h"  /* Assets-tab material preview: megatexture pages -> RGBA, CPU-only */
 #include "imgpreview.h"   /* ...plus plain-material/direct-image previews and asset catalogs */
+#include "prefabpreview.h"/* Prefab Details: async untextured geometry from installed containers */
 #include "soundpreview.h" /* Assets-tab sound auditioning: the editor's own preview path */
 #include "patch.h"
 #include "algo.h"
@@ -395,6 +396,10 @@ static DWORD WINAPI bootstrap_thread(LPVOID p)
          * files only; no engine call, no hook. The preview worker calls it when the atlas route
          * declines. */
         sh_imgpreview_install();
+        /* prefabpreview: a bounded worker layered over imgpreview's lazy installed-resource index.
+         * It decodes only positions/normals/indices for the selected prefab and never calls the game
+         * renderer or ships/persists resource bytes. Missing/unsupported models remain UI proxies. */
+        sh_prefabpreview_install();
         /* soundpreview: the same browser's AUDIO half. Calls the editor's own audition path
          * (sound-world vtbl +0x30) and keeps the emitter handle it returns, so a preview can be
          * stopped and a second click replaces the first instead of stacking on it -- the two things

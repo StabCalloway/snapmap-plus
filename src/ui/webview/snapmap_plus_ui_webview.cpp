@@ -18,6 +18,7 @@
  *   - save is deferred + applied under the loop mutex; delete likewise.
  */
 #include <windows.h>
+#include <dwmapi.h>
 #include <shlobj.h>
 #include <winhttp.h>
 #include <wrl.h>
@@ -55,6 +56,8 @@ static sh_iface    *g_iface = nullptr;
 static HWND                     g_hwnd         = nullptr;
 static ICoreWebView2Controller *g_controller   = nullptr;
 static ICoreWebView2           *g_webview      = nullptr;
+static ComPtr<ICoreWebView2Environment12> g_webview_environment12;
+static ComPtr<ICoreWebView2_17>            g_webview17;
 static bool                     g_webview_ready = false;
 static std::wstring             g_html;
 static std::string              g_version = "dev";
@@ -1678,6 +1681,51 @@ static void poc_send_entity_assets()
 }
 static void poc_post_json(const wchar_t *json) { if (g_webview) g_webview->PostWebMessageAsJson(json); }
 
+/* Move at most one decoded prefab mesh per UI tick. WebView2 shared buffers avoid base64's extra copy
+ * and 4/3 expansion; JavaScript uploads from the ArrayBuffer and releases it immediately. If an older
+ * runtime lacks the shared-buffer interfaces, consume the result and keep the honest procedural proxy. */
+static void poc_send_prefab_mesh_completion()
+{
+    if (!g_iface || !g_iface->vtbl || !g_iface->vtbl->get_prefab_mesh) return;
+    int query = g_iface->vtbl->get_prefab_mesh(g_iface, nullptr, 0);
+    if (query >= 0) return;
+    int needed = -query;
+    if (needed <= 0 || needed > 16 * 1024 * 1024) return;
+
+    if (!g_webview_environment12 || !g_webview17) {
+        std::vector<unsigned char> discard((size_t)needed);
+        g_iface->vtbl->get_prefab_mesh(g_iface, discard.data(), needed);
+        poc_post_json(L"{\"kind\":\"prefabMeshTransportUnavailable\"}");
+        return;
+    }
+
+    ComPtr<ICoreWebView2SharedBuffer> shared;
+    if (FAILED(g_webview_environment12->CreateSharedBuffer((UINT64)needed, shared.GetAddressOf())) || !shared) {
+        std::vector<unsigned char> discard((size_t)needed);
+        g_iface->vtbl->get_prefab_mesh(g_iface, discard.data(), needed);
+        poc_post_json(L"{\"kind\":\"prefabMeshTransportUnavailable\"}");
+        return;
+    }
+    BYTE *dst = nullptr;
+    if (FAILED(shared->get_Buffer(&dst)) || !dst) {
+        std::vector<unsigned char> discard((size_t)needed);
+        g_iface->vtbl->get_prefab_mesh(g_iface, discard.data(), needed);
+        poc_post_json(L"{\"kind\":\"prefabMeshTransportUnavailable\"}");
+        return;
+    }
+    if (g_iface->vtbl->get_prefab_mesh(g_iface, dst, needed) != needed) {
+        poc_post_json(L"{\"kind\":\"prefabMeshTransportUnavailable\"}");
+        return;
+    }
+
+    std::wstring meta = L"{\"kind\":\"prefabMesh\",\"bytes\":";
+    meta += std::to_wstring(needed); meta += L"}";
+    if (FAILED(g_webview17->PostSharedBufferToScript(shared.Get(),
+                                                     COREWEBVIEW2_SHARED_BUFFER_ACCESS_READ_ONLY,
+                                                     meta.c_str())))
+        poc_post_json(L"{\"kind\":\"prefabMeshTransportUnavailable\"}");
+}
+
 static void poc_post_window_state(HWND hwnd)
 {
     if (!hwnd) return;
@@ -1752,35 +1800,21 @@ static void poc_post_config_status()
     g_config_status_posted = true;
 }
 
-/* cheap targeted scan of a prefab JSON body (no full JSON parser, same "find key -> read quoted value"
- * approach as json_get_wstr): the entity count is the number of exact `"idSnapEntity"` tokens (each entity's
- * own "~type"; the prefab's OWN root "~type" is "idSnapEntityPrefab" -- a different exact token, so this
- * can't double-count it). The per-class tally scans every `"className"` key (only entityDef objects have
- * one) and groups by value. */
-static void poc_tally_prefab(const std::string &body, int *entityCount, std::vector<std::pair<std::string, int>> &tally)
+/* Cheap targeted scan of a prefab JSON body (no full JSON parser, same "find key" approach as
+ * json_get_wstr). The exact `"idSnapEntity"` token appears once per entity; the prefab root uses the
+ * distinct `"idSnapEntityPrefab"`, so it cannot be double-counted. */
+static int poc_count_prefab_entities(const std::string &body)
 {
-    *entityCount = 0;
+    int entityCount = 0;
     size_t pos = 0;
-    while ((pos = body.find("\"idSnapEntity\"", pos)) != std::string::npos) { (*entityCount)++; pos += 14; }
-
-    std::map<std::string, int> counts;
-    const std::string key = "\"className\"";
-    pos = 0;
-    while ((pos = body.find(key, pos)) != std::string::npos) {
-        size_t p = pos + key.size();
-        size_t colon = body.find(':', p);
-        if (colon == std::string::npos) break;
-        size_t q1 = body.find('"', colon + 1);
-        if (q1 == std::string::npos) break;
-        size_t q2 = body.find('"', q1 + 1);
-        if (q2 == std::string::npos) break;
-        counts[body.substr(q1 + 1, q2 - q1 - 1)]++;
-        pos = q2 + 1;
+    while ((pos = body.find("\"idSnapEntity\"", pos)) != std::string::npos) {
+        entityCount++;
+        pos += 14;
     }
-    for (auto &kv : counts) tally.push_back(kv);
+    return entityCount;
 }
-/* read a single prefab file (resolved via +0xc0) and push its entity count + per-class tally so the
- * Prefabs tab detail pane can show real numbers instead of the old static mockup values. folder="" -> root. */
+/* Read a single prefab file (resolved via +0xc0) and push its scene plus aggregate entity count.
+ * folder="" selects the prefab root. */
 /* read a small sidecar/aux file fully; refuses anything over 64 KB (metadata is tiny -- a huge file
  * here is not ours). Returns false on missing/oversize/unreadable. */
 static bool poc_read_small_file(const char *path, std::string &body)
@@ -1802,21 +1836,25 @@ static void poc_send_prefab_detail(const std::string &name, const std::string &f
 {
     if (!g_webview) return;
     int entityCount = 0;
-    std::vector<std::pair<std::string, int>> tally;
     bool ok = false;
     std::string metaBody;
+    std::string sceneBody;
     if (!name.empty()) {
         char path[1024];
         if (poc_prefab_file_path(folder, name, path, (int)sizeof path)) {
             FILE *fp = nullptr;
             if (fopen_s(&fp, path, "rb") == 0 && fp) {
                 fseek(fp, 0, SEEK_END); long sz = ftell(fp); fseek(fp, 0, SEEK_SET);
-                if (sz > 0) {
-                    std::string body; body.resize((size_t)sz);
-                    size_t got = fread(&body[0], 1, (size_t)sz, fp);
-                    body.resize(got);
-                    poc_tally_prefab(body, &entityCount, tally);
-                    ok = true;
+                /* The scene is sent only for the selected prefab. Cap it independently of the tiny
+                 * metadata sidecar so a hand-dropped giant file cannot force a huge WebMessage allocation. */
+                if (sz > 0 && sz <= 8 * 1024 * 1024) {
+                    sceneBody.resize((size_t)sz);
+                    size_t got = fread(&sceneBody[0], 1, (size_t)sz, fp);
+                    sceneBody.resize(got);
+                    if (got == (size_t)sz) {
+                        entityCount = poc_count_prefab_entities(sceneBody);
+                        ok = true;
+                    }
                 }
                 fclose(fp);
             }
@@ -1830,19 +1868,14 @@ static void poc_send_prefab_detail(const std::string &name, const std::string &f
     std::wstring json = L"{\"kind\":\"prefabDetail\",\"name\":\""; json += poc_json_w(name.c_str());
     json += L"\",\"ok\":"; json += ok ? L"true" : L"false";
     json += L",\"meta\":\""; json += poc_json_w(metaBody.c_str());
+    json += L"\",\"scene\":\""; json += poc_json_w(sceneBody.c_str());
     json += L"\",\"count\":"; json += std::to_wstring(entityCount);
-    json += L",\"types\":[";
-    for (size_t i = 0; i < tally.size(); i++) {
-        if (i) json += L",";
-        json += L"{\"className\":\""; json += poc_json_w(tally[i].first.c_str());
-        json += L"\",\"count\":"; json += std::to_wstring(tally[i].second); json += L"}";
-    }
-    json += L"]}";
+    json += L"}";
     g_webview->PostWebMessageAsJson(json.c_str());
 }
 
 /* extract a sidecar's "tags" array as individual strings (targeted find-key scan, the same approach as
- * poc_tally_prefab -- no JSON library). The values are re-escaped fresh on emit; sidecar bytes are NEVER
+ * poc_count_prefab_entities -- no JSON library). The values are re-escaped fresh on emit; sidecar bytes are NEVER
  * spliced into an outgoing message raw, so a malformed/hand-edited sidecar can only lose its own tags,
  * never invalidate the whole prefabs message. */
 static bool poc_read_meta_tags(const std::string &folder, const std::string &name, std::vector<std::string> &tags)
@@ -2242,6 +2275,14 @@ static void poc_create_window()
      * launch. Fits comfortably within 1920x1080 with room for the taskbar. */
     g_hwnd = CreateWindowExW(0, L"SnapmapPlusStudioWebView", L"Snapmap+",
         WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1440, 900, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    /* Match snapmap-midi's captionless-window treatment. Extending one pixel of native frame into the
+     * client is what asks DWM to retain its drop shadow and Windows 11 rounded corners even though
+     * WM_NCCALCSIZE removes the visible caption/frame. Zero margins produce the flat square window. */
+    if (g_hwnd) {
+        MARGINS shadow = {1, 1, 1, 1};
+        HRESULT hr = DwmExtendFrameIntoClientArea(g_hwnd, &shadow);
+        if (FAILED(hr)) poc_logf("DwmExtendFrameIntoClientArea failed hr=0x%08lx", (unsigned long)hr);
+    }
     /* force a frame recalculation now so WM_NCCALCSIZE strips the title bar BEFORE the window is first
      * shown -- otherwise the native frame lingers until the first resize/move. */
     if (g_hwnd)
@@ -2319,6 +2360,38 @@ static HRESULT on_message(ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventA
             } else if (cmd == L"selectPrefab") {
                 std::wstring nm, fo; json_get_wstr(json, L"name", nm); json_get_wstr(json, L"folder", fo);
                 poc_send_prefab_detail(w_to_utf8(nm), w_to_utf8(fo));
+            } else if (cmd == L"resolvePrefabModel") {
+                int generation = 0; std::wstring inherit;
+                json_get_int(json, L"generation", &generation);
+                json_get_wstr(json, L"inherit", inherit);
+                std::string inherit8 = w_to_utf8(inherit);
+                char model[512] = {0}; int ok = 0;
+                if (generation >= 0 && inherit8.size() < 512 && g_iface && g_iface->vtbl &&
+                    g_iface->vtbl->resolve_prefab_model)
+                    ok = g_iface->vtbl->resolve_prefab_model(g_iface, inherit8.c_str(),
+                                                             model, (int)sizeof model);
+                std::wstring m = L"{\"kind\":\"prefabModelResolved\",\"generation\":";
+                m += std::to_wstring(generation);
+                m += L",\"inherit\":\""; m += poc_json_w(inherit8.c_str());
+                m += L"\",\"model\":\""; if (ok) m += poc_json_w(model); m += L"\"}";
+                poc_post_json(m.c_str());
+            } else if (cmd == L"requestPrefabMesh") {
+                int generation = 0; std::wstring model;
+                json_get_int(json, L"generation", &generation);
+                json_get_wstr(json, L"model", model);
+                std::string model8 = w_to_utf8(model);
+                int queued = 0;
+                if (generation >= 0 && model8.size() < 512 && g_iface && g_iface->vtbl &&
+                    g_iface->vtbl->request_prefab_mesh)
+                    queued = g_iface->vtbl->request_prefab_mesh(g_iface,
+                                                                (unsigned long)generation,
+                                                                model8.c_str());
+                if (!queued && !model8.empty()) {
+                    std::wstring m = L"{\"kind\":\"prefabMeshUnavailable\",\"generation\":";
+                    m += std::to_wstring(generation);
+                    m += L",\"model\":\""; m += poc_json_w(model8.c_str()); m += L"\"}";
+                    poc_post_json(m.c_str());
+                }
             } else if (cmd == L"savePrefabMeta") {
                 std::wstring nm, fo, body; json_get_wstr(json, L"name", nm); json_get_wstr(json, L"folder", fo); json_get_wstr(json, L"body", body);
                 poc_apply_save_prefab_meta(w_to_utf8(nm), w_to_utf8(fo), w_to_utf8(body));
@@ -2604,6 +2677,9 @@ static HRESULT on_controller_created(HRESULT result, ICoreWebView2Controller *co
     g_controller = controller; g_controller->AddRef();
     g_controller->get_CoreWebView2(&g_webview);
     if (!g_webview) { poc_log("get_CoreWebView2 null"); return E_FAIL; }
+    g_webview17.Reset();
+    g_webview->QueryInterface(__uuidof(ICoreWebView2_17),
+                              reinterpret_cast<void **>(g_webview17.GetAddressOf()));
     { /* disable WebView2's default (browser) right-click menu app-wide; our own menus are HTML. */
         ICoreWebView2Settings *settings = nullptr;
         if (SUCCEEDED(g_webview->get_Settings(&settings)) && settings) {
@@ -2628,6 +2704,9 @@ static HRESULT on_controller_created(HRESULT result, ICoreWebView2Controller *co
 static HRESULT on_environment_created(HRESULT result, ICoreWebView2Environment *env)
 {
     if (FAILED(result) || !env) { poc_logf("environment creation FAILED hr=0x%08lx", (unsigned long)result); return result; }
+    g_webview_environment12.Reset();
+    env->QueryInterface(__uuidof(ICoreWebView2Environment12),
+                        reinterpret_cast<void **>(g_webview_environment12.GetAddressOf()));
     return env->CreateCoreWebView2Controller(g_hwnd, Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(on_controller_created).Get());
 }
 static void poc_start_webview()
@@ -2920,6 +2999,8 @@ static void poc_think_loop()
                                    state_called, n, sn);
             }
         }
+
+        if (g_webview_ready) poc_send_prefab_mesh_completion();
 
         MSG msg;
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageW(&msg); }

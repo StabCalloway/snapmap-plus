@@ -37,6 +37,12 @@ adds `class="dark"` to the embedded document root when needed, and only lets the
 visible after a successful `NavigationCompleted`. A returning dark-theme user therefore never sees a
 light or blank first frame.
 
+The host keeps a normal `WS_OVERLAPPEDWINDOW` so Windows still owns resizing, Aero Snap, minimize,
+maximize, and taskbar behavior, then consumes `WM_NCCALCSIZE` so the HTML menubar replaces the visible
+caption. A one-pixel `DwmExtendFrameIntoClientArea` margin preserves DWM's rounded Windows 11 corners and
+drop shadow on that captionless client, matching snapmap-midi without switching to a behavior-poor
+frameless-window style.
+
 ## The asset browser is a live installed-data view
 
 The asset browser does not ship or build a second asset library. Selecting a category posts that one
@@ -63,6 +69,42 @@ on both sides of the interface. Image selections carry their catalog kind throug
 append-stable request slot, so a direct Image bypasses VMTR and cannot be captured by a same-named
 Material record. The large game files remain the source of truth and are never copied into the
 overlay.
+
+## The prefab preview reconstructs an installed-data scene
+
+Prefab Details does not capture the game's renderer or build a screenshot. The host reads only the
+currently selected prefab JSON and sends it to the page, where `prefab_viewport.js` reconstructs entity
+transforms from the prefab-local `spawnPosition`, `spawnOrientation`, and scale values. Direct
+`renderModelInfo.model` names are already in the file; otherwise the backend first uses the pure,
+read-locked entityDef lookup without loading or creating an engine object. A file-only fallback follows
+installed `snapEditorEntityDef` / `entityDef` inheritance. That fallback also understands
+`spawnerEntityPair.entityStatic`, so pickup spawners resolve to the armor, health, ammo, or equipment mesh
+they represent instead of becoming generic boxes.
+
+Geometry crosses three append-only interface slots: resolve inherit to model (`+0x308`), enqueue an
+installed mesh request (`+0x310`), and consume one completion (`+0x318`). A single bounded worker uses the
+asset browser's lazy installed-resource index to seek the requested BMODEL or MD6 payload. It decodes only
+positions, packed normals, and indices, with hard source/vertex/index/surface limits. BMODEL's fixed
+32-byte per-surface metadata is consumed between surfaces; treating that block as the next material header
+was the reason formerly working single-surface geometry degraded every multi-surface prop to a proxy. The frontend host
+moves one completion per think-loop tick through a WebView2 shared buffer, avoiding base64 expansion; the
+page uploads it and immediately releases the shared buffer.
+
+The page classifies saved entities before drawing them. Props and resolved pickup spawners use their real
+installed mesh; blockers prefer the visible `renderModels` shell rather than its editor trigger shell;
+SnapMap logic, action/listener I/O, and filter entities use the installed hexagon, circle, and diamond
+editor meshes. The common saved `isVisible: false` state is not treated as a trigger classification;
+class/inheritance semantics keep ordinary props, pickups, and logic nodes solid. Actual invisible triggers
+are faint outlined helpers and do not control automatic framing. Decals
+remain thin helper planes because their appearance is texture data, not geometry. Only truly unsupported,
+over-budget, missing, or transport-incompatible solid geometry falls back to a procedural box. The floor
+keeps Cartesian square coordinates but extends beyond the scene and fades through a circular radial mask.
+
+This is a read-only hook into files the player already installed, not a shipped asset library. Snapmap+
+does not persist or package payload bytes, textures, materials, skeletons, animations, or game renderer
+state. WebGL draws only when input, geometry, theme, or the observed preview bounds change. Its device-pixel
+ratio, triangle count, and GPU cache are bounded, so resizing the native window or the shared pane divider
+does not create a continuous render loop.
 
 ## The 30 Hz manual think-loop
 
@@ -119,12 +161,12 @@ include that header** — it is a matched pair. The backend writes the vtable an
 frontend reads them at the same offsets.
 
 - The backend builds it (`operator_new(0x60)`), installs the vtable — the **77 original-faithful
-  slots** (`+0x00..+0x260`) plus the **clone-extension slots** appended after them (`+0x268..+0x300`
-  today, `sizeof(sh_iface_vtbl) == 0x308`: the atomic class+inherit apply, the class/inherit
+  slots** (`+0x00..+0x260`) plus the **clone-extension slots** appended after them (`+0x268..+0x318`
+  today, `sizeof(sh_iface_vtbl) == 0x320`: the atomic class+inherit apply, the class/inherit
   enumerators, the dev-layer query, the wire-edit generation counter, the synchronous `apply_sync`,
   the timeline inherit-normalize, push/clear-stack, the generic configuration getter/setter, and the
   asset-browser group — preview request/publish, request-by-name, the material atlas rect, the
-  catalog pager, and sound preview/session) — initializes the mutex at `+0x08`, and hangs a
+  catalog pager, sound preview/session, and prefab model resolution/mesh transport) — initializes the mutex at `+0x08`, and hangs a
   sub-object off `+0x58` that holds the SnapStack subcommand map and the main-thread work-queue.
 - **Extension slots are append-only**: a new capability gets the next slot after the current end;
   original-block offsets never move. This is also a real failure mode, not a formality — a frontend

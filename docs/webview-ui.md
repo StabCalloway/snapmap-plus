@@ -26,6 +26,7 @@ DLL ships.
 |---|---|
 | `src/ui/webview/snapmap_plus_ui_webview.cpp` | The WebView2 host: the `sh_ui_init` entry, a Win32 window, the WebView2 bring-up, the 30 Hz think-loop, and the JS <-> native bridge. |
 | `src/ui/webview/mockup.html` | The UI (HTML/CSS/JS), embedded into the DLL at build time. Self-populates with sample data when opened in a plain browser (a "preview mode", inert in DOOM). |
+| `src/ui/webview/prefab_viewport.js` | The Prefab Details WebGL2 renderer: local-scene reconstruction, orbit/zoom controls, installed-mesh transport, bounds/framing, and resize-driven drawing. The build inlines it into the embedded page. |
 | `src/ui/webview/LUCIDE_LICENSE.md` | License notice for the small Lucide SVG subset embedded in `mockup.html`. |
 | `src/ui/webview/theme_bootstrap.{h,cpp}` | The small pure helper that validates the registered theme JSON and seeds the embedded document's root class before WebView2 navigation. |
 | `src/ui/build.ps1` | Builds `build/webview/snapmap-plus-ui.dll`: fetches the WebView2 SDK from NuGet into `build/` (gitignored), statically links the loader, embeds the HTML. Reuses `sl_exports.cpp` + `snapmap-plus-ui.def`. Invoked by the repo-root `build.ps1` (backend + frontend in lockstep). |
@@ -114,6 +115,53 @@ through it).
 
 Newest first. Each dated entry covers one working session's worth of change; the undated **Baseline**
 entry at the bottom is the original POC buildout, before this doc tracked dates per entry.
+
+### 2026-08-17 -- Rounded native window and visible Prefab scene
+
+- **The captionless window now keeps DWM's native finish.** Like snapmap-midi, Snapmap+ still creates an
+  ordinary managed Windows window and removes only its visible non-client area. Extending one pixel of
+  frame into the client before the frame refresh preserves the Windows 11 rounded corners and drop shadow
+  without giving up native resize borders, Aero Snap, minimize/maximize, or taskbar-aware maximize sizing.
+- **The Prefab scene no longer clears and stops before its first draw.** The grid's disabled normal
+  attribute supplied XYZ to `vertexAttrib4f` but omitted W; WebGL rejected that call after clearing the
+  background, so neither the grid, decoded models, nor proxy boxes were reached. The call now supplies
+  all XYZW components. Draw exceptions also replace the status overlay with an explicit render failure
+  instead of silently leaving another blank canvas.
+
+### 2026-08-17 -- Interactive Prefab Details scene preview
+
+- **Selecting a prefab now reconstructs it in a 3D preview above Name.** Saved local
+  `spawnPosition`, `spawnOrientation`, and `renderModelInfo.scale` values place each entity in one
+  framed scene. Drag orbits, the wheel zooms, and double-click frames the scene again. Neutral lighting,
+  an untextured grid, and simple per-class colors keep the result readable without making textures a
+  dependency. Unsupported or missing solid geometry remains visible as an honestly simplified box proxy.
+- **The detail layout is intentionally quiet.** The preview uses the same `--field` background as Decl
+  Text. Orbit controls sit top-right and the only aggregate metadata, `N entity` / `N entities`, sits
+  bottom-right. Per-class pills are gone. Name now has its own label, while Name, Description, and Tags
+  inherit the exact global field font, size, padding, border, and color rules used by Entity State.
+- **Installed geometry is read only when needed.** A direct `renderModelInfo.model`, or the model resolved
+  from an entity's inherited definition, is sent to a bounded backend worker. It reads the matching
+  BMODEL/MD6 payload from the user's installed resource containers, decodes only positions, normals, and
+  indices, and transfers that neutral mesh through a WebView2 shared buffer. Snapmap+ ships, copies, and
+  persists no game resource, texture, material, skeleton, or animation data.
+- **The scene now distinguishes what the editor data means.** Solid props use their installed meshes;
+  blocking volumes choose their visible solid/textured shell instead of `renderModels.item[0]`'s trigger
+  shell; invisible triggers are faint outlined volumes and do not zoom the camera away from the physical
+  prefab. Logic nodes use DOOM's installed hexagon mesh, action/listener I/O uses its circle, and filters
+  use its diamond. Texture-only decals remain thin helper planes. The overlay legend documents those
+  roles, orbit controls sit top-right, and the entity count sits bottom-right.
+- **Multi-surface props and pickup spawners no longer degrade to cubes.** Cooked BMODEL stores a fixed
+  32-byte metadata block after every surface; the initial decoder did not consume it and therefore read
+  the first surface's trailer as the second material name. The decoder now handles every surface and was
+  checked against the Loadout Station shelves, controls, locker parts, weapons, and editor glyphs.
+  Spawner-only decls are also followed through installed `spawnerEntityPair.entityStatic` inheritance to
+  the real ammo, armor, health, or equipment model.
+- **Rendering is demand-driven.** A `ResizeObserver` watches the preview element itself, so native window
+  resizing and shared-divider drags follow the same path. Resize/input/theme/resource changes are
+  coalesced through `requestAnimationFrame`; there is no continuous render loop. Drawing-buffer size
+  changes only when measured pixels change, device scale is capped, the GPU cache is bounded, and each
+  frame has a triangle budget. The square coordinate grid extends farther than the scene and fades under
+  a circular radial mask. Browser preview mode uses procedural transform-only stand-ins.
 
 ### 2026-08-17 -- Expanded Decl Text becomes a real modal
 
@@ -980,10 +1028,9 @@ that doc for the write-up.
 - **Prefabs tab, wired to the real filesystem** (`%LOCALAPPDATA%\snapmap-plus\prefabs\`) -- no fake/mockup data:
   - Live list of real `.json` prefab files, refreshed from disk on every Prefabs-tab click; an empty-state
     message when there are none yet.
-  - Detail pane on selecting a prefab: real entity count and a per-`className` tally, read directly from
-    the file (a targeted "find key -> read quoted value" scan, not a full JSON parser -- same approach as
-    the JS<->native command parsing). Description/Tags fields are visibly disabled ("a later step"): the
-    prefab JSON has no metadata field, so there's nothing to show until a sidecar file is designed.
+  - Prefab Details shows the selected file as an interactive, untextured 3D scene above Name, with its
+    controls top-right and aggregate entity count bottom-right. Description and Tags are editable
+    sidecar metadata; no per-class summary is displayed.
   - Delete and Rename are real file operations (`DeleteFileA` / `MoveFileA`), each with a collision/confirm
     guard client-side and a safe no-overwrite guarantee native-side.
   - **Folders**: one real level of subdirectories under `prefabs\` (no nested-within-nested) -- the

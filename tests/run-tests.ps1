@@ -29,12 +29,15 @@
 #   soundpreview_queue_test -- failed-kick rollback, FIFO preservation, overflow, and name bounds
 #   imgpreview_index_test -- bounded parsing, compact-name ownership, catalog routing, and rollback
 #   imgpreview_catalog_test -- lazy optional unions, compact Wwise strings, direct images, and paging
+#   prefabpreview_test -- bounded BMODEL/MD6 geometry decode and binary transport blob
 #   megapreview_io_test -- compact VMTR metadata and selected-entry Mega2 reads
 #   serialization_buffer_test -- timeline growth, terminal failures, retained capacity, and 32 MB cap
 # The JS checks run after the native suite:
 #   decl_overlay_test -- syntax-paint/text alignment for the Entity State editor
 #   decl_index_order_test -- numeric item[n] presentation, nesting, and 1000-boundary regression
 #   entity_list_test -- bounded DOM window, full logical filtering, selection, and event delegation
+#   prefab_viewport_contract_test -- Prefab Details layout, resize, budgets, and shared-buffer transport
+#   window_chrome_contract_test -- captionless DWM shadow/rounded-corner contract
 # -Doom <unpacked DOOMx64vk.exe>: ALSO the signature-resolver tests, which scan a real
 #   (Steamless-unpacked) DOOM image:
 #   sig_test            -- every engine signature resolves to its known RVA
@@ -81,6 +84,7 @@ $tests = @(
     @{ name = "soundpreview_queue_test"; src = 'soundpreview_queue_test.c';                       arg = "" }
     @{ name = "imgpreview_index_test"; src = 'imgpreview_index_test.c ..\src\backend\bcn.c';      arg = "" }
     @{ name = "imgpreview_catalog_test"; src = 'imgpreview_catalog_test.c ..\src\backend\bcn.c';  arg = "" }
+    @{ name = "prefabpreview_test"; src = 'prefabpreview_test.c';                                  arg = "" }
     @{ name = "megapreview_io_test"; src = 'megapreview_io_test.c';                                 arg = "" }
     @{ name = "serialization_buffer_test"; src = 'serialization_buffer_test.cpp'; cxx = $true;     arg = "" }
 )
@@ -114,7 +118,7 @@ Write-Host ""; Write-Host "all native tests passed ($($tests.Count))"
 
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) { Write-Host "[FAIL] node not found (required for decl editor tests)"; exit 1 }
-$jsTests = @("decl_overlay_test.js", "decl_index_order_test.js", "asset_browser_test.js", "entity_list_test.js")
+$jsTests = @("decl_overlay_test.js", "decl_index_order_test.js", "asset_browser_test.js", "entity_list_test.js", "prefab_viewport_contract_test.js", "window_chrome_contract_test.js")
 foreach ($jsTest in $jsTests) {
     & $node.Source (Join-Path $here $jsTest)
     if ($LASTEXITCODE -ne 0) { Write-Host "[FAIL] $jsTest (exit $LASTEXITCODE)"; exit 1 }

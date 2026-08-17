@@ -321,6 +321,9 @@ void sh_iface_bind_engine_slots(const sh_iface_engine_slots *s)
     g_iface_vtbl_live.material_rect           = s->material_rect;           /* +0x2F0 */
     g_iface_vtbl_live.sound_preview           = s->sound_preview;           /* +0x2F8 */
     g_iface_vtbl_live.sound_session           = s->sound_session;           /* +0x300 */
+    g_iface_vtbl_live.resolve_prefab_model    = s->resolve_prefab_model;    /* +0x308 */
+    g_iface_vtbl_live.request_prefab_mesh     = s->request_prefab_mesh;     /* +0x310 */
+    g_iface_vtbl_live.get_prefab_mesh         = s->get_prefab_mesh;         /* +0x318 */
 }
 
 /* --------------------------------------------------------------------- the factory -----------------
