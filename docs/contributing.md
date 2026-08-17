@@ -164,14 +164,15 @@ By default this compiles and runs 26 **self-contained native tests** (no game ne
 - **`imgpreview_catalog_test`** — lazy optional unions, compact Wwise strings, direct-image
   previews, bank preference, wrapper collapse, and VMTR paging.
 - **`prefabpreview_test`** — bounded single/multi-surface BMODEL and MD6 geometry decoding,
-  spawner-to-pickup model inheritance, and the Prefab Details binary transport-blob contract.
+  spawner-to-pickup model inheritance, sparse inherited render-scale composition, and the Prefab Details
+  binary transport-blob contract.
 - **`megapreview_io_test`** — compact VMTR strings, on-demand scratch, and selected-entry Mega2
   page lookup without retained shard tables.
 - **`serialization_buffer_test`** — timeline growth, terminal failures, retained capacity, and the 32 MB cap.
 
-The same command then runs six JavaScript contract tests for the declaration editor, asset browser,
-bounded Entities-list rendering, the Prefab Details viewport/resize/shared-buffer contract, and native
-window chrome source wiring.
+The same command then runs seven JavaScript tests for the declaration editor, asset browser, bounded
+Entities-list rendering, sparse prefab matrix/scale transforms, the Prefab Details
+viewport/resize/shared-buffer contract, and native window chrome source wiring.
 
 Two more tests scan a **real DOOM image** — a `DOOMx64vk.exe` that's been unpacked from its Steam DRM wrapper
 (e.g. with Steamless). **Running these is REQUIRED if you add or change any entry in the engine signature
@@ -207,7 +208,7 @@ A third test, `xinput_ordinal_test.c`, is a **runtime** cross-check of the XInpu
 a built DLL and calls its exports by ordinal. CI verifies that same invariant *statically* with `dumpbin` (the
 "XInput ordinal parity" step), so you normally don't need to run it by hand.
 
-CI runs the 26 self-contained native tests, six JavaScript contract tests, and the installer tests on every PR; the DOOM-image tests are local-only
+CI runs the 26 self-contained native tests, seven JavaScript tests, and the installer tests on every PR; the DOOM-image tests are local-only
 (CI has no game image).
 
 After the normal test run has built its executables, contributors with DOOM installed can also

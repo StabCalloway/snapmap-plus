@@ -74,15 +74,21 @@ overlay.
 
 Prefab Details does not capture the game's renderer or build a screenshot. The host reads only the
 currently selected prefab JSON and sends it to the page, where `prefab_viewport.js` reconstructs entity
-transforms from the prefab-local `spawnPosition`, `spawnOrientation`, and scale values. Direct
+transforms from the prefab-local `spawnPosition`, `spawnOrientation`, and scale values. The serialized
+orientation is a sparse patch over identity: each `mat[n]` is one complete local axis, matching idTech's
+column-major `idMat3`, and an omitted component retains its identity value. Scale is sparse too, but its
+base is the inherited entityDef's `renderModelInfo.scale` rather than always `{1,1,1}`. Direct
 `renderModelInfo.model` names are already in the file; otherwise the backend first uses the pure,
 read-locked entityDef lookup without loading or creating an engine object. A file-only fallback follows
-installed `snapEditorEntityDef` / `entityDef` inheritance. That fallback also understands
+installed `snapEditorEntityDef` / `entityDef` inheritance and composes the first derived occurrence of
+each scale component. That fallback also understands
 `spawnerEntityPair.entityStatic`, so pickup spawners resolve to the armor, health, ammo, or equipment mesh
 they represent instead of becoming generic boxes.
 
-Geometry crosses three append-only interface slots: resolve inherit to model (`+0x308`), enqueue an
-installed mesh request (`+0x310`), and consume one completion (`+0x318`). A single bounded worker uses the
+Geometry crosses four append-only interface slots: resolve inherit to model (`+0x308`), enqueue an
+installed mesh request (`+0x310`), consume one completion (`+0x318`), and resolve the model plus inherited
+scale defaults (`+0x320`). The original model-only slot remains intact for paired-version compatibility.
+A single bounded worker uses the
 asset browser's lazy installed-resource index to seek the requested BMODEL or MD6 payload. It decodes only
 positions, packed normals, and indices, with hard source/vertex/index/surface limits. BMODEL's fixed
 32-byte per-surface metadata is consumed between surfaces; treating that block as the next material header
@@ -93,11 +99,15 @@ page uploads it and immediately releases the shared buffer.
 The page classifies saved entities before drawing them. Props and resolved pickup spawners use their real
 installed mesh; blockers prefer the visible `renderModels` shell rather than its editor trigger shell;
 SnapMap logic, action/listener I/O, and filter entities use the installed hexagon, circle, and diamond
-editor meshes. The common saved `isVisible: false` state is not treated as a trigger classification;
+editor meshes. Hexagons retain their full editor size while I/O circles and filter diamonds use the
+editor's half scale. The common saved `isVisible: false` state is not treated as a trigger classification;
 class/inheritance semantics keep ordinary props, pickups, and logic nodes solid. Actual invisible triggers
 are faint outlined helpers and do not control automatic framing. Decals
 remain thin helper planes because their appearance is texture data, not geometry. Only truly unsupported,
-over-budget, missing, or transport-incompatible solid geometry falls back to a procedural box. The floor
+over-budget, missing, or transport-incompatible solid geometry falls back to a procedural box. Block and
+trigger fallback boxes match the installed unit meshes' bottom origin instead of centering around the spawn
+point. Neutral lighting uses an inverse-transpose normal matrix, so strongly non-uniform block dimensions
+do not skew their shading. The floor
 keeps Cartesian square coordinates but extends beyond the scene and fades through a circular radial mask.
 
 This is a read-only hook into files the player already installed, not a shipped asset library. Snapmap+

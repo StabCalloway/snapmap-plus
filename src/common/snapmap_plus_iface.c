@@ -324,6 +324,7 @@ void sh_iface_bind_engine_slots(const sh_iface_engine_slots *s)
     g_iface_vtbl_live.resolve_prefab_model    = s->resolve_prefab_model;    /* +0x308 */
     g_iface_vtbl_live.request_prefab_mesh     = s->request_prefab_mesh;     /* +0x310 */
     g_iface_vtbl_live.get_prefab_mesh         = s->get_prefab_mesh;         /* +0x318 */
+    g_iface_vtbl_live.resolve_prefab_defaults = s->resolve_prefab_defaults; /* +0x320 */
 }
 
 /* --------------------------------------------------------------------- the factory -----------------

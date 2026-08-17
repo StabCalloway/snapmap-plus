@@ -34,7 +34,8 @@ SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, sound_session) == 0x300);
 SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, resolve_prefab_model) == 0x308);
 SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, request_prefab_mesh) == 0x310);
 SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, get_prefab_mesh) == 0x318);
-SH_STATIC_ASSERT(sizeof(sh_iface_vtbl) == 0x320);
+SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, resolve_prefab_defaults) == 0x320);
+SH_STATIC_ASSERT(sizeof(sh_iface_vtbl) == 0x328);
 SH_STATIC_ASSERT(offsetof(sh_iface, sub) == 0x58);
 SH_STATIC_ASSERT(sizeof(sh_iface) == 0x60);
 

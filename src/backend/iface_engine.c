@@ -584,6 +584,26 @@ static int slot_get_prefab_mesh(sh_iface *self, void *out_blob, int out_capacity
     return sh_prefabpreview_get(out_blob, out_capacity);
 }
 
+/* +0x320 (ext 23) Resolve sparse prefab render state against installed entityDef defaults. The
+ * prefab stores only overrides, so retaining scale from the decl is necessary for block dimensions
+ * and for any prop whose authoring defaults are not the unit vector. */
+static int slot_resolve_prefab_defaults(sh_iface *self, const char *inherit_name,
+                                        char *out_model, int out_capacity,
+                                        float *out_scale, int out_scale_count)
+{
+    if (!out_model || out_capacity <= 0 || !out_scale || out_scale_count < 3) return 0;
+    int flags = sh_prefabpreview_resolve_defaults(inherit_name, out_model,
+                                                  (size_t)out_capacity, out_scale);
+    /* Preserve ext 20's live-typeinfo preference for ordinary entities while the installed-data
+     * resolver supplies scale. It already gives spawners their semantic pickup model. */
+    if (slot_resolve_prefab_model(self, inherit_name, out_model, out_capacity))
+        flags |= SH_PREFAB_DEFAULT_MODEL;
+    else {
+        out_model[0] = '\0'; flags &= ~SH_PREFAB_DEFAULT_MODEL;
+    }
+    return flags;
+}
+
 static void mode_set_selection_state(int state)
 {
     const uint8_t *ed = editor_session();
@@ -1388,6 +1408,7 @@ int sh_iface_engine_install(const sig_result *results, size_t n, const uint8_t *
     slots.resolve_prefab_model    = slot_resolve_prefab_model;       /* +0x308 ext 20 */
     slots.request_prefab_mesh     = slot_request_prefab_mesh;        /* +0x310 ext 21 */
     slots.get_prefab_mesh         = slot_get_prefab_mesh;            /* +0x318 ext 22 */
+    slots.resolve_prefab_defaults = slot_resolve_prefab_defaults;    /* +0x320 ext 23 */
     sh_iface_bind_engine_slots(&slots);
 
     char line[200];

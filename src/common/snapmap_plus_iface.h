@@ -365,6 +365,13 @@ typedef int (*sh_resolve_prefab_model_fn)(struct sh_iface *self, const char *inh
 typedef int (*sh_request_prefab_mesh_fn)(struct sh_iface *self, unsigned long generation,
                                          const char *model_name);
 typedef int (*sh_get_prefab_mesh_fn)(struct sh_iface *self, void *out_blob, int out_capacity);
+#ifndef SH_PREFAB_DEFAULT_MODEL
+#define SH_PREFAB_DEFAULT_MODEL 0x1
+#define SH_PREFAB_DEFAULT_SCALE 0x2
+#endif
+typedef int (*sh_resolve_prefab_defaults_fn)(struct sh_iface *self, const char *inherit_name,
+                                             char *out_model, int out_capacity,
+                                             float *out_scale, int out_scale_count);
 
 /* +0x2B0/+0x2B8 (ext 9/10) backend-owned persistent configuration. Values cross the matched-pair
  * boundary as complete UTF-8 JSON fragments so future booleans/numbers/objects do not need new ABI
@@ -587,6 +594,7 @@ typedef struct sh_iface_vtbl {
     sh_resolve_prefab_model_fn resolve_prefab_model; /* +0x308 (ext 20) entityDef inherit -> model */
     sh_request_prefab_mesh_fn  request_prefab_mesh;  /* +0x310 (ext 21) async installed geometry */
     sh_get_prefab_mesh_fn      get_prefab_mesh;      /* +0x318 (ext 22) consume geometry blob */
+    sh_resolve_prefab_defaults_fn resolve_prefab_defaults; /* +0x320 (ext 23) model + scale defaults */
 } sh_iface_vtbl;
 
 SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, config_get_json) == 0x2B0);
@@ -603,7 +611,8 @@ SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, sound_session) == 0x300);
 SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, resolve_prefab_model) == 0x308);
 SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, request_prefab_mesh) == 0x310);
 SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, get_prefab_mesh) == 0x318);
-SH_STATIC_ASSERT(sizeof(sh_iface_vtbl) == 0x320);
+SH_STATIC_ASSERT(offsetof(sh_iface_vtbl, resolve_prefab_defaults) == 0x320);
+SH_STATIC_ASSERT(sizeof(sh_iface_vtbl) == 0x328);
 
 /* ------------------------------------------------------------------ the interface object -----------
  * Object layout PINNED to FUN_1800229b1: +0x00 vtable, +0x08 mutex, +0x58 sub-object. The mutex is an
@@ -768,6 +777,7 @@ typedef struct sh_iface_engine_slots {
     sh_resolve_prefab_model_fn resolve_prefab_model;        /* +0x308 (ext 20) */
     sh_request_prefab_mesh_fn  request_prefab_mesh;         /* +0x310 (ext 21) */
     sh_get_prefab_mesh_fn      get_prefab_mesh;             /* +0x318 (ext 22) */
+    sh_resolve_prefab_defaults_fn resolve_prefab_defaults;  /* +0x320 (ext 23) */
 } sh_iface_engine_slots;
 
 void sh_iface_bind_engine_slots(const sh_iface_engine_slots *slots);

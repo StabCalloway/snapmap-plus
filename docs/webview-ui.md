@@ -116,6 +116,23 @@ through it).
 Newest first. Each dated entry covers one working session's worth of change; the undated **Baseline**
 entry at the bottom is the original POC buildout, before this doc tracked dates per entry.
 
+### 2026-08-17 -- Prefab transform and dimension parity
+
+- **Saved rotations now use idTech's actual matrix layout.** Each serialized `mat[n]` is one complete
+  local axis and becomes one WebGL matrix column. Missing components retain the identity matrix component
+  because prefab state is a sparse patch; treating every omission as zero previously produced singular
+  matrices, inverted rotations, horizontal props, and flattened geometry.
+- **Saved dimensions now inherit their real entity defaults.** Prefab JSON stores only changed scale
+  components. A new append-only backend bridge walks the installed entityDef inheritance chain and returns
+  the model plus default X/Y/Z scale, then the viewport overlays the saved components. Blocking volumes
+  therefore keep untouched dimensions such as the default 16-unit thickness instead of silently becoming
+  one unit. Direct-model entities use the same resolver, and valid one-unit slabs are no longer inflated by
+  the fallback proxy's old two-unit minimum.
+- **Editor helpers match their in-game hierarchy and axes.** Logic hexagons remain full size; I/O circles
+  and filter diamonds render at half size. Their procedural fallbacks now occupy the same thin-X / YZ plane
+  as the installed editor glyphs. Block and trigger proxies are bottom-anchored like the installed unit
+  meshes, even after rotation, while inverse-transpose normal lighting keeps non-uniform volumes readable.
+
 ### 2026-08-17 -- Rounded native window and visible Prefab scene
 
 - **The captionless window now keeps DWM's native finish.** Like snapmap-midi, Snapmap+ still creates an

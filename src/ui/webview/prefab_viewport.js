@@ -1,5 +1,11 @@
 /* Prefab Details interactive 3D viewport. Pure ASCII; embedded by src/ui/build.ps1. */
 var prefabViewport = (function () {
+  var finite = prefabTransform.finite;
+  var vec3 = prefabTransform.vec3;
+  var orientationAxes = prefabTransform.orientationAxes;
+  var composeMatrix = prefabTransform.composeMatrix;
+  var composeBottomAnchoredBox = prefabTransform.composeBottomAnchoredBox;
+  var transformPoint = prefabTransform.transformPoint;
   var host = document.getElementById('pcPreview');
   var canvas = document.getElementById('pcCanvas');
   var status = document.getElementById('pcPreviewStatus');
@@ -21,6 +27,7 @@ var prefabViewport = (function () {
   var cameraTouched = false;
   var lastSceneText = '';
   var dragging = false, lastPointerX = 0, lastPointerY = 0;
+  var normalMatrixScratch = new Float32Array(9);
 
   var MARKER_MODELS = {
     logic:'models/snapmaps/logic/snapedit_logic_hexagon.lwo',
@@ -28,6 +35,16 @@ var prefabViewport = (function () {
     output:'models/snapmaps/logic/snapedit_logic_circle.lwo',
     filter:'models/snapmaps/logic/snapedit_logic_diamond.lwo',
     system:'models/snapmaps/logic/snapedit_logic_hexagon.lwo'
+  };
+  /* The editor renders the semantic hex body at full size and its I/O/filter attachments at half
+     scale. The cooked source meshes themselves are similarly sized (the diamond is actually wider),
+     so using them all at 1.0 reverses the in-game hierarchy. */
+  var MARKER_SCALES = {
+    logic:[1,1,1], system:[1,1,1], input:[.5,.5,.5], output:[.5,.5,.5], filter:[.5,.5,.5]
+  };
+  var MARKER_PROXY_SIZES = {
+    logic:[8,43,37.5], system:[8,43,37.5],
+    input:[4,21.5,21.5], output:[4,21.5,21.5], filter:[4,28,28]
   };
 
   function setStatus(text) { if (status) status.textContent = text || ''; }
@@ -63,10 +80,12 @@ var prefabViewport = (function () {
       'layout(location=2) in float aFade;\n' +
       'uniform mat4 uViewProjection;\n' +
       'uniform mat4 uModel;\n' +
+      'uniform mat3 uNormalMatrix;\n' +
       'out float vLight;\n' +
       'out float vFade;\n' +
       'void main(){\n' +
-      ' vec3 normal=normalize(mat3(uModel)*(aNormalPacked.xyz*2.0-1.0));\n' +
+      ' vec3 transformedNormal=uNormalMatrix*(aNormalPacked.xyz*2.0-1.0);\n' +
+      ' vec3 normal=dot(transformedNormal,transformedNormal)>0.00000001?normalize(transformedNormal):vec3(0,0,1);\n' +
       ' vec3 lightDir=normalize(vec3(-0.45,0.35,0.82));\n' +
       ' vLight=0.38+0.62*max(dot(normal,lightDir),0.0);\n' +
       ' vFade=aFade;\n' +
@@ -160,22 +179,24 @@ var prefabViewport = (function () {
     function vertex(x,y,z,nx,ny,nz) {
       positions.push(x,y,z); normals.push(nx,ny,nz); return positions.length/3-1;
     }
-    var topCenter = vertex(0,0,.18,0,0,1), bottomCenter = vertex(0,0,-.18,0,0,-1);
-    var top = [], bottom = [];
+    /* Installed SnapMap editor glyphs are thin on local X and occupy the YZ plane. Keep the
+       procedural fallback on those same axes so a transport/decoder fallback does not turn it. */
+    var frontCenter = vertex(.5,0,0,1,0,0), backCenter = vertex(-.5,0,0,-1,0,0);
+    var front = [], back = [];
     for (var i=0;i<sides;i++) {
       var a=rotation+i*Math.PI*2/sides;
-      top.push(vertex(Math.cos(a)*.5,Math.sin(a)*.5,.18,0,0,1));
-      bottom.push(vertex(Math.cos(a)*.5,Math.sin(a)*.5,-.18,0,0,-1));
+      front.push(vertex(.5,Math.cos(a)*.5,Math.sin(a)*.5,1,0,0));
+      back.push(vertex(-.5,Math.cos(a)*.5,Math.sin(a)*.5,-1,0,0));
     }
     for (i=0;i<sides;i++) {
       var next=(i+1)%sides;
-      indices.push(topCenter,top[i],top[next], bottomCenter,bottom[next],bottom[i]);
+      indices.push(frontCenter,front[i],front[next], backCenter,back[next],back[i]);
       a=rotation+(i+.5)*Math.PI*2/sides;
-      var nx=Math.cos(a),ny=Math.sin(a);
-      var s0=vertex(positions[top[i]*3],positions[top[i]*3+1],.18,nx,ny,0);
-      var s1=vertex(positions[top[next]*3],positions[top[next]*3+1],.18,nx,ny,0);
-      var s2=vertex(positions[top[next]*3],positions[top[next]*3+1],-.18,nx,ny,0);
-      var s3=vertex(positions[top[i]*3],positions[top[i]*3+1],-.18,nx,ny,0);
+      var ny=Math.cos(a),nz=Math.sin(a);
+      var s0=vertex(.5,positions[front[i]*3+1],positions[front[i]*3+2],0,ny,nz);
+      var s1=vertex(.5,positions[front[next]*3+1],positions[front[next]*3+2],0,ny,nz);
+      var s2=vertex(-.5,positions[front[next]*3+1],positions[front[next]*3+2],0,ny,nz);
+      var s3=vertex(-.5,positions[front[i]*3+1],positions[front[i]*3+2],0,ny,nz);
       indices.push(s0,s3,s2,s0,s2,s1);
     }
     var bytes=new ArrayBuffer(positions.length/3*16),view=new DataView(bytes);
@@ -187,7 +208,7 @@ var prefabViewport = (function () {
       view.setUint8(off+13,encodedNormal(normals[i*3+1]));
       view.setUint8(off+14,encodedNormal(normals[i*3+2])); view.setUint8(off+15,255);
     }
-    return uploadMesh(new Uint8Array(bytes),new Uint32Array(indices),[-.5,-.5,-.18,.5,.5,.18],name);
+    return uploadMesh(new Uint8Array(bytes),new Uint32Array(indices),[-.5,-.5,-.5,.5,.5,.5],name);
   }
 
   function uploadMesh(vertices, indices, bounds, name) {
@@ -212,6 +233,7 @@ var prefabViewport = (function () {
       program = makeProgram();
       loc.viewProjection = gl.getUniformLocation(program, 'uViewProjection');
       loc.model = gl.getUniformLocation(program, 'uModel');
+      loc.normalMatrix = gl.getUniformLocation(program, 'uNormalMatrix');
       loc.color = gl.getUniformLocation(program, 'uColor');
       loc.unlit = gl.getUniformLocation(program, 'uUnlit');
       loc.alpha = gl.getUniformLocation(program, 'uAlpha');
@@ -232,36 +254,6 @@ var prefabViewport = (function () {
       setStatus('3D preview unavailable (WebGL2)');
       return false;
     }
-  }
-
-  function finite(value, fallback) {
-    value = Number(value);
-    return isFinite(value) ? value : fallback;
-  }
-
-  function vec3(value, fallback) {
-    value = value || {};
-    return [finite(value.x, fallback[0]), finite(value.y, fallback[1]), finite(value.z, fallback[2])];
-  }
-
-  function orientationRows(value) {
-    var source = value && value.mat ? value.mat : null;
-    var identity = [[1,0,0],[0,1,0],[0,0,1]], rows = [];
-    for (var i = 0; i < 3; i++) {
-      var row = source ? (Array.isArray(source) ? source[i] : source['mat[' + i + ']']) : null;
-      if (!row) rows.push(identity[i].slice());
-      else rows.push([finite(row.x, 0), finite(row.y, 0), finite(row.z, 0)]);
-    }
-    return rows;
-  }
-
-  function composeMatrix(position, rows, scale) {
-    return new Float32Array([
-      rows[0][0]*scale[0], rows[1][0]*scale[0], rows[2][0]*scale[0], 0,
-      rows[0][1]*scale[1], rows[1][1]*scale[1], rows[2][1]*scale[1], 0,
-      rows[0][2]*scale[2], rows[1][2]*scale[2], rows[2][2]*scale[2], 0,
-      position[0], position[1], position[2], 1
-    ]);
   }
 
   function entityRole(className, inherit, edit) {
@@ -329,43 +321,58 @@ var prefabViewport = (function () {
     return listed[0] || '';
   }
 
+  function updateEntityTransform(entity, defaultScale, hasDefaultScale) {
+    defaultScale = defaultScale || [1,1,1];
+    var scale = vec3(entity.scalePatch, defaultScale);
+    for (var i = 0; i < 3; i++) if (Math.abs(scale[i]) < 0.0001) scale[i] = 0.0001;
+    var markerScale = MARKER_SCALES[entity.role] || [1,1,1];
+    var displayScale = [scale[0]*markerScale[0], scale[1]*markerScale[1],
+                        scale[2]*markerScale[2]];
+    var inheritedSize = hasDefaultScale &&
+      (Math.abs(defaultScale[0]-1)>.0001 || Math.abs(defaultScale[1]-1)>.0001 ||
+       Math.abs(defaultScale[2]-1)>.0001);
+    var size;
+    if (entity.role === 'decal') {
+      size=[.5,Math.abs(finite(entity.stampSize.x,12)),Math.abs(finite(entity.stampSize.y,12))];
+    } else if (MARKER_PROXY_SIZES[entity.role]) {
+      var markerSize=MARKER_PROXY_SIZES[entity.role];
+      size=[markerSize[0]*Math.abs(scale[0]),markerSize[1]*Math.abs(scale[1]),
+            markerSize[2]*Math.abs(scale[2])];
+    } else if (entity.role==='blocker' || entity.role==='trigger' ||
+               entity.hasScalePatch || inheritedSize) {
+      size=[Math.abs(scale[0]),Math.abs(scale[1]),Math.abs(scale[2])];
+    } else if (entity.hasClipSizePatch) {
+      size=vec3(entity.clipSizePatch,[32,32,32]).map(Math.abs);
+    } else if (entity.model) size=[48,48,48];
+    else if (/logic|listener|variable|filter/i.test(entity.className)) size=[12,12,12];
+    else size=[32,32,32];
+    /* Thin blocking slabs and decals are valid. Only avoid a singular proxy; do not inflate a
+       one-unit authored dimension to the former arbitrary two-unit minimum. */
+    for (i = 0; i < 3; i++) if (size[i] < .01) size[i] = .01;
+    entity.modelMatrix=composeMatrix(entity.position,entity.axes,displayScale);
+    entity.proxyMatrix=(entity.role==='blocker'||entity.role==='trigger')
+      ? composeBottomAnchoredBox(entity.position,entity.axes,size)
+      : composeMatrix(entity.position,entity.axes,size);
+    entity.helperShape=/cylinder/i.test(entity.inherit+entity.model)?'cylinder':'box';
+  }
+
   function entityFromJson(raw) {
     var def = raw && raw.entityDef ? raw.entityDef : {};
     var state = def.state || {}, edit = state.edit || {};
     var rmi = edit.renderModelInfo || {};
-    var position = vec3(edit.spawnPosition, [0,0,0]);
-    var rows = orientationRows(edit.spawnOrientation);
-    var hasScale = rmi.scale && typeof rmi.scale === 'object';
-    var scale = vec3(rmi.scale, [1,1,1]);
-    for (var i = 0; i < 3; i++) if (Math.abs(scale[i]) < 0.0001) scale[i] = 0.0001;
     var className = (typeof def.className === 'string') ? def.className : '';
     var inherit = (typeof def.inherit === 'string') ? def.inherit : '';
     var role = entityRole(className, inherit, edit);
-    var model = selectEntityModel(role, rmi, edit);
-    var clipSize = vec3((edit.clipModelInfo || {}).size, [32,32,32]);
-    var size;
-    if (role === 'decal') {
-      var stamp=edit.size||{};
-      size=[.5,Math.abs(finite(stamp.x,12)),Math.abs(finite(stamp.y,12))];
-    }
-    else if (MARKER_MODELS[role]) size = [18,18,8];
-    else if (hasScale) size = [Math.abs(scale[0]), Math.abs(scale[1]), Math.abs(scale[2])];
-    else if (edit.clipModelInfo && edit.clipModelInfo.size) size = clipSize.map(Math.abs);
-    else if (model) size = [48,48,48];
-    else if (/logic|listener|variable|filter/i.test(className)) size = [12,12,12];
-    else size = [32,32,32];
-    for (i = 0; i < 3; i++) if (size[i] < 2) size[i] = 2;
-    return {inherit:inherit, model:model, className:className, role:role,
-            resolveModel:role!=='decal'&&!MARKER_MODELS[role],
-            color:roleColor(role,className), helperShape:/cylinder/i.test(inherit+model)?'cylinder':'box',
-            modelMatrix:composeMatrix(position, rows, scale),
-            proxyMatrix:composeMatrix(position, rows, size)};
-  }
-
-  function transformPoint(matrix, x, y, z) {
-    return [matrix[0]*x + matrix[4]*y + matrix[8]*z + matrix[12],
-            matrix[1]*x + matrix[5]*y + matrix[9]*z + matrix[13],
-            matrix[2]*x + matrix[6]*y + matrix[10]*z + matrix[14]];
+    var entity={inherit:inherit, model:selectEntityModel(role,rmi,edit), className:className, role:role,
+      resolveModel:role!=='decal'&&!MARKER_MODELS[role], color:roleColor(role,className),
+      position:vec3(edit.spawnPosition,[0,0,0]), axes:orientationAxes(edit.spawnOrientation),
+      scalePatch:(rmi.scale&&typeof rmi.scale==='object')?rmi.scale:null,
+      hasScalePatch:!!(rmi.scale&&typeof rmi.scale==='object'),
+      clipSizePatch:(edit.clipModelInfo||{}).size||null,
+      hasClipSizePatch:!!(edit.clipModelInfo&&(edit.clipModelInfo.size)), stampSize:edit.size||{},
+      modelMatrix:null, proxyMatrix:null, helperShape:'box'};
+    updateEntityTransform(entity,[1,1,1],false);
+    return entity;
   }
 
   function extendBounds(bounds, matrix, local) {
@@ -451,12 +458,16 @@ var prefabViewport = (function () {
     if (typeof post === 'function') post({cmd:'resolvePrefabModel', generation:generation, inherit:inherit});
   }
 
-  function applyResolvedModel(inherit, model) {
+  function applyResolvedModel(inherit, info) {
+    if (typeof info === 'string') info={model:info,scale:null};
+    info=info||{model:'',scale:null};
     for (var i = 0; i < entities.length; i++) {
-      if (entities[i].resolveModel && !entities[i].model && entities[i].inherit === inherit)
-        entities[i].model = model || '';
+      var entity=entities[i];
+      if (!entity.resolveModel || entity.inherit !== inherit) continue;
+      if (!entity.model && info.model) entity.model=info.model;
+      updateEntityTransform(entity,info.scale||[1,1,1],!!info.scale);
+      if (entity.model) requestMesh(entity.model);
     }
-    if (model) requestMesh(model);
   }
 
   function updateStatus() {
@@ -525,8 +536,11 @@ var prefabViewport = (function () {
   function modelResolved(d) {
     if (!d || d.generation !== generation || !resolving[d.inherit]) return;
     delete resolving[d.inherit]; pending--;
-    inheritModels[d.inherit] = d.model || '';
-    applyResolvedModel(d.inherit, d.model || '');
+    var scale=Array.isArray(d.scale)&&d.scale.length>=3
+      ? [finite(d.scale[0],1),finite(d.scale[1],1),finite(d.scale[2],1)] : null;
+    var info={model:d.model||'',scale:scale};
+    inheritModels[d.inherit]=info;
+    applyResolvedModel(d.inherit,info);
     refreshBounds(!cameraTouched); updateStatus();
   }
 
@@ -589,6 +603,15 @@ var prefabViewport = (function () {
 
   function drawMesh(mesh, matrix, color, alpha, unlit) {
     gl.bindVertexArray(mesh.vao); gl.uniformMatrix4fv(loc.model,false,matrix);
+    /* Each model matrix is rotation times diagonal scale. Dividing each basis column by its squared
+       length yields the inverse-transpose normal matrix without a per-vertex matrix inverse. */
+    var normal=normalMatrixScratch;
+    for(var c=0;c<3;c++){
+      var o=c*4,n=matrix[o]*matrix[o]+matrix[o+1]*matrix[o+1]+matrix[o+2]*matrix[o+2];
+      n=n>.00000001?1/n:1;
+      normal[c*3]=matrix[o]*n;normal[c*3+1]=matrix[o+1]*n;normal[c*3+2]=matrix[o+2]*n;
+    }
+    gl.uniformMatrix3fv(loc.normalMatrix,false,normal);
     gl.uniform3fv(loc.color,color); gl.uniform1f(loc.alpha,alpha);
     gl.uniform1f(loc.unlit,unlit?1:0);
     gl.drawElements(gl.TRIANGLES,mesh.count,gl.UNSIGNED_INT,0);
@@ -677,7 +700,7 @@ var prefabViewport = (function () {
     for (var i=0;i<list.length;i++) entities.push(entityFromJson(list[i]));
     for (i=0;i<entities.length;i++) {
       if (entities[i].model) requestMesh(entities[i].model);
-      else if (entities[i].inherit && entities[i].resolveModel) resolveInherit(entities[i].inherit);
+      if (entities[i].inherit && entities[i].resolveModel) resolveInherit(entities[i].inherit);
     }
     refreshBounds(true); updateStatus();
   }

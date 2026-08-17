@@ -348,13 +348,14 @@ static int pp_decl_string_in_range(const unsigned char *data, size_t start, size
 static int pp_decl_block_string(const unsigned char *data, size_t len, const char *block,
                                 const char *field, char *out, size_t cap)
 {
+    size_t block_start = 0, block_end = 0;
     size_t block_len = strlen(block);
     for (size_t i = 0; i < len; ++i) {
         if (!pp_decl_token_at(data, len, i, block)) continue;
         size_t p = i + block_len;
         while (p < len && (pp_ascii_space(data[p]) || data[p] == '=')) ++p;
         if (p >= len || data[p] != '{') continue;
-        size_t start = ++p;
+        block_start = ++p;
         int depth = 1, quote = 0, escape = 0;
         for (; p < len; ++p) {
             unsigned char c = data[p];
@@ -364,11 +365,80 @@ static int pp_decl_block_string(const unsigned char *data, size_t len, const cha
                 else if (c == '"') quote = 0;
             } else if (c == '"') quote = 1;
             else if (c == '{') depth++;
-            else if (c == '}' && --depth == 0)
-                return pp_decl_string_in_range(data, start, p, field, out, cap);
+            else if (c == '}' && --depth == 0) { block_end = p; break; }
+        }
+        if (block_end > block_start)
+            return pp_decl_string_in_range(data, block_start, block_end, field, out, cap);
+    }
+    return 0;
+}
+
+static int pp_decl_block_range(const unsigned char *data, size_t start, size_t end,
+                               const char *block, size_t *out_start, size_t *out_end)
+{
+    size_t block_len = strlen(block);
+    if (!data || !out_start || !out_end || start > end) return 0;
+    for (size_t i = start; i < end; ++i) {
+        if (!pp_decl_token_at(data, end, i, block)) continue;
+        size_t p = i + block_len;
+        while (p < end && (pp_ascii_space(data[p]) || data[p] == '=')) ++p;
+        if (p >= end || data[p] != '{') continue;
+        size_t body = ++p;
+        int depth = 1, quote = 0, escape = 0;
+        for (; p < end; ++p) {
+            unsigned char c = data[p];
+            if (quote) {
+                if (escape) escape = 0;
+                else if (c == '\\') escape = 1;
+                else if (c == '"') quote = 0;
+            } else if (c == '"') quote = 1;
+            else if (c == '{') depth++;
+            else if (c == '}' && --depth == 0) {
+                *out_start = body; *out_end = p; return 1;
+            }
         }
     }
     return 0;
+}
+
+static int pp_decl_float_in_range(const unsigned char *data, size_t start, size_t end,
+                                  const char *field, float *out)
+{
+    size_t field_len = strlen(field);
+    for (size_t i = start; i < end; ++i) {
+        if (!pp_decl_token_at(data, end, i, field)) continue;
+        size_t p = i + field_len;
+        while (p < end && pp_ascii_space(data[p])) ++p;
+        if (p < end && data[p] == '=') { ++p; while (p < end && pp_ascii_space(data[p])) ++p; }
+        size_t value = p;
+        while (p < end && !pp_ascii_space(data[p]) && data[p] != ';' && data[p] != '}') ++p;
+        size_t n = p - value;
+        if (!n || n >= 64u) continue;
+        char number[64], *tail = NULL;
+        memcpy(number, data + value, n); number[n] = '\0';
+        double parsed = strtod(number, &tail);
+        if (tail && tail != number && *tail == '\0' && _finite(parsed) &&
+            parsed >= -FLT_MAX && parsed <= FLT_MAX) {
+            *out = (float)parsed; return 1;
+        }
+    }
+    return 0;
+}
+
+static void pp_decl_render_scale(const unsigned char *data, size_t len,
+                                 float scale[3], unsigned *have)
+{
+    size_t render_start = 0, render_end = 0, scale_start = 0, scale_end = 0;
+    if (!pp_decl_block_range(data, 0, len, "renderModelInfo", &render_start, &render_end) ||
+        !pp_decl_block_range(data, render_start, render_end, "scale", &scale_start, &scale_end)) return;
+    static const char *fields[3] = { "x", "y", "z" };
+    for (unsigned i = 0; i < 3; ++i) {
+        float value = 0.0f;
+        if (!(*have & (1u << i)) &&
+            pp_decl_float_in_range(data, scale_start, scale_end, fields[i], &value)) {
+            scale[i] = value; *have |= 1u << i;
+        }
+    }
 }
 
 static int pp_read_entity_decl(const char *name, unsigned char **out, size_t *out_len)
@@ -377,33 +447,54 @@ static int pp_read_entity_decl(const char *name, unsigned char **out, size_t *ou
     return sh_imgpreview_read_payload(SH_ASSET_ENTITYDEF, name, PP_MAX_SOURCE_BYTES, out, out_len);
 }
 
-int sh_prefabpreview_resolve_model(const char *inherit_name, char *out_model, size_t out_capacity)
+int sh_prefabpreview_resolve_defaults(const char *inherit_name, char *out_model,
+                                      size_t out_capacity, float out_scale[3])
 {
     char current[PP_NAME_CAP], next[PP_NAME_CAP];
-    if (!out_model || out_capacity < 2) return 0;
+    if (!out_model || out_capacity < 2 || !out_scale) return 0;
     out_model[0] = '\0';
+    out_scale[0] = out_scale[1] = out_scale[2] = 1.0f;
     if (!inherit_name || !inherit_name[0] || strlen(inherit_name) >= sizeof current) return 0;
     strcpy_s(current, sizeof current, inherit_name);
+    int flags = 0;
+    unsigned scale_have = 0;
 
-    /* Normal inheritance is shallow; the cap also contains corrupt or cyclic installed decls. A
-     * spawner takes one side trip through entityStatic before following that pickup's inheritance. */
+    /* Derived fields win: collect the first model and first occurrence of each sparse scale component
+     * while walking toward the base. A spawner switches to its represented entityStatic before any
+     * generic spawner render defaults can masquerade as the physical pickup. */
     for (int depth = 0; depth < 20; ++depth) {
         unsigned char *decl = NULL; size_t len = 0;
-        if (!pp_read_entity_decl(current, &decl, &len)) return 0;
-        int found = pp_decl_block_string(decl, len, "renderModelInfo", "model",
-                                         out_model, out_capacity);
-        if (found) { free(decl); return 1; }
+        if (!pp_read_entity_decl(current, &decl, &len)) break;
         next[0] = '\0';
-        if (!pp_decl_block_string(decl, len, "spawnerEntityPair", "entityStatic",
-                                  next, sizeof next) &&
-            !pp_decl_string_in_range(decl, 0, len, "inherit", next, sizeof next)) {
-            free(decl); return 0;
+        if (pp_decl_block_string(decl, len, "spawnerEntityPair", "entityStatic",
+                                 next, sizeof next)) {
+            /* Discard any generic spawner defaults gathered before reaching the semantic payload. */
+            flags = 0; scale_have = 0; out_model[0] = '\0';
+            out_scale[0] = out_scale[1] = out_scale[2] = 1.0f;
+            free(decl);
+            if (!next[0] || _stricmp(next, current) == 0) break;
+            strcpy_s(current, sizeof current, next);
+            continue;
         }
+
+        if (!(flags & SH_PREFAB_DEFAULT_MODEL) &&
+            pp_decl_block_string(decl, len, "renderModelInfo", "model",
+                                 out_model, out_capacity)) flags |= SH_PREFAB_DEFAULT_MODEL;
+        pp_decl_render_scale(decl, len, out_scale, &scale_have);
+        int inherited = pp_decl_string_in_range(decl, 0, len, "inherit", next, sizeof next);
         free(decl);
-        if (!next[0] || _stricmp(next, current) == 0) return 0;
+        if (!inherited || !next[0] || _stricmp(next, current) == 0) break;
         strcpy_s(current, sizeof current, next);
     }
-    return 0;
+    if (scale_have) flags |= SH_PREFAB_DEFAULT_SCALE;
+    return flags;
+}
+
+int sh_prefabpreview_resolve_model(const char *inherit_name, char *out_model, size_t out_capacity)
+{
+    float scale[3];
+    return (sh_prefabpreview_resolve_defaults(inherit_name, out_model, out_capacity, scale) &
+            SH_PREFAB_DEFAULT_MODEL) != 0;
 }
 
 static int pp_read_logical_model(const char *name, unsigned char **out, size_t *out_len)

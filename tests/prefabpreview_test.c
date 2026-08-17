@@ -23,7 +23,15 @@ int sh_imgpreview_read_payload(int kind, const char *name, size_t max_bytes,
         else if (_stricmp(name,"pickup/test")==0)
             body="{ inherit=\"pickup/base\"; edit={} }";
         else if (_stricmp(name,"pickup/base")==0)
-            body="{ edit={ renderModelInfo={ model=\"models/pickup.lwo\"; } } }";
+            body="{ inherit=\"pickup/root\"; edit={ renderModelInfo={ model=\"models/pickup.lwo\"; scale={ x=2; z=4; } } } }";
+        else if (_stricmp(name,"pickup/root")==0)
+            body="{ edit={ renderModelInfo={ scale={ y=3; } } } }";
+        else if (_stricmp(name,"block/child")==0)
+            body="{ inherit=\"block/base\"; edit={ renderModelInfo={ scale={ x=1e300; y=115; z=216; } } } }";
+        else if (_stricmp(name,"block/base")==0)
+            body="{ edit={ renderModelInfo={ model=\"models/block.lwo\"; scale={ x=16; y=128; z=64; } } } }";
+        else if (_stricmp(name,"model/only")==0)
+            body="{ edit={ renderModelInfo={ model=\"models/plain.lwo\"; } } }";
     }
     if (body) {
         size_t n=strlen(body); unsigned char *copy=(unsigned char *)malloc(n);
@@ -113,9 +121,23 @@ int main(void)
         pp_mesh_free(&mesh);
     }
     {
-        char model[128]; resolver_mode=1;
+        char model[128]; float scale[3]; resolver_mode=1;
         CHECK(sh_prefabpreview_resolve_model("spawner/test",model,sizeof model)==1);
         CHECK(strcmp(model,"models/pickup.lwo")==0);
+        CHECK(sh_prefabpreview_resolve_defaults("spawner/test",model,sizeof model,scale)==
+              (SH_PREFAB_DEFAULT_MODEL|SH_PREFAB_DEFAULT_SCALE));
+        CHECK(strcmp(model,"models/pickup.lwo")==0);
+        CHECK(fabs(scale[0]-2.0f)<0.001f && fabs(scale[1]-3.0f)<0.001f &&
+              fabs(scale[2]-4.0f)<0.001f);
+        CHECK(sh_prefabpreview_resolve_defaults("block/child",model,sizeof model,scale)==
+              (SH_PREFAB_DEFAULT_MODEL|SH_PREFAB_DEFAULT_SCALE));
+        CHECK(strcmp(model,"models/block.lwo")==0);
+        CHECK(fabs(scale[0]-16.0f)<0.001f && fabs(scale[1]-115.0f)<0.001f &&
+              fabs(scale[2]-216.0f)<0.001f);
+        CHECK(sh_prefabpreview_resolve_defaults("model/only",model,sizeof model,scale)==
+              SH_PREFAB_DEFAULT_MODEL);
+        CHECK(strcmp(model,"models/plain.lwo")==0);
+        CHECK(scale[0]==1.0f && scale[1]==1.0f && scale[2]==1.0f);
         CHECK(sh_prefabpreview_resolve_model("missing",model,sizeof model)==0);
         resolver_mode=0;
     }

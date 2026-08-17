@@ -2365,15 +2365,32 @@ static HRESULT on_message(ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventA
                 json_get_int(json, L"generation", &generation);
                 json_get_wstr(json, L"inherit", inherit);
                 std::string inherit8 = w_to_utf8(inherit);
-                char model[512] = {0}; int ok = 0;
-                if (generation >= 0 && inherit8.size() < 512 && g_iface && g_iface->vtbl &&
-                    g_iface->vtbl->resolve_prefab_model)
-                    ok = g_iface->vtbl->resolve_prefab_model(g_iface, inherit8.c_str(),
-                                                             model, (int)sizeof model);
+                char model[512] = {0}; float scale[3] = {1.0f, 1.0f, 1.0f}; int flags = 0;
+                if (generation >= 0 && inherit8.size() < 512 && g_iface && g_iface->vtbl) {
+                    if (g_iface->vtbl->resolve_prefab_defaults)
+                        flags = g_iface->vtbl->resolve_prefab_defaults(g_iface, inherit8.c_str(),
+                                                                       model, (int)sizeof model,
+                                                                       scale, 3);
+                    /* Keep ext 20 as an ABI-compatible model-only fallback. New paired builds use
+                     * ext 23 so sparse prefab scale can be merged with the installed entityDef. */
+                    if (!(flags & SH_PREFAB_DEFAULT_MODEL) &&
+                        g_iface->vtbl->resolve_prefab_model &&
+                        g_iface->vtbl->resolve_prefab_model(g_iface, inherit8.c_str(),
+                                                            model, (int)sizeof model))
+                        flags |= SH_PREFAB_DEFAULT_MODEL;
+                }
                 std::wstring m = L"{\"kind\":\"prefabModelResolved\",\"generation\":";
                 m += std::to_wstring(generation);
                 m += L",\"inherit\":\""; m += poc_json_w(inherit8.c_str());
-                m += L"\",\"model\":\""; if (ok) m += poc_json_w(model); m += L"\"}";
+                m += L"\",\"model\":\"";
+                if (flags & SH_PREFAB_DEFAULT_MODEL) m += poc_json_w(model);
+                m += L"\",\"scale\":";
+                if (flags & SH_PREFAB_DEFAULT_SCALE) {
+                    m += L"["; m += std::to_wstring(scale[0]); m += L",";
+                    m += std::to_wstring(scale[1]); m += L",";
+                    m += std::to_wstring(scale[2]); m += L"]";
+                } else m += L"null";
+                m += L"}";
                 poc_post_json(m.c_str());
             } else if (cmd == L"requestPrefabMesh") {
                 int generation = 0; std::wstring model;

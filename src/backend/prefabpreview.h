@@ -32,6 +32,11 @@ typedef struct sh_prefab_mesh_blob_header {
 /* Vertex payload immediately after the padded UTF-8 name: XYZ float32 + packed normal XYZW bytes. */
 #define SH_PREFAB_MESH_VERTEX_STRIDE 16u
 
+#ifndef SH_PREFAB_DEFAULT_MODEL
+#define SH_PREFAB_DEFAULT_MODEL 0x1
+#define SH_PREFAB_DEFAULT_SCALE 0x2
+#endif
+
 /* Starts one bounded worker. Resource indexes and payloads remain lazy until the first request. */
 int sh_prefabpreview_install(void);
 
@@ -43,6 +48,12 @@ int sh_prefabpreview_request(unsigned long generation, const char *model_name);
  * entityDef inheritance and spawnerEntityPair.entityStatic links, which expose the pickup model that
  * a SnapMap spawner represents even though the spawner decl itself has no render model. */
 int sh_prefabpreview_resolve_model(const char *inherit_name, char *out_model, size_t out_capacity);
+
+/* Resolve the model plus the inherited renderModelInfo.scale defaults that the saved prefab stores
+ * only as a sparse override. Returns SH_PREFAB_DEFAULT_* bits; out_scale always starts at {1,1,1}.
+ * Derived decl components win over base components, including semantic pickup entityStatic links. */
+int sh_prefabpreview_resolve_defaults(const char *inherit_name, char *out_model,
+                                      size_t out_capacity, float out_scale[3]);
 
 /* Consume the oldest completion. Returns 0 when none exists, -required_bytes for a size query or short
  * destination, and positive bytes copied when the completion was consumed. */

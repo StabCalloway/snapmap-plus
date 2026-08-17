@@ -135,18 +135,19 @@ if ($slice.IndexOf('</script') -ge 0) { throw "schema_slice.js contains '</scrip
 $html = $html.Replace($sliceTag, "<script>`n$slice</script>")
 if ($html.IndexOf($sliceTag) -ge 0) { throw "schema_slice.js inlining left a residual src tag -- duplicate tag in mockup.html?" }
 
-# Inline the Prefab Details WebGL viewport for the same NavigateToString reason. Keeping the renderer in
-# its own source file makes the sizeable math/input/resource transport unit independently testable while
-# the shipped page remains one embedded document.
-$prefabViewportPath = Join-Path $here "webview\prefab_viewport.js"
-$prefabViewportTag  = '<script src="prefab_viewport.js"></script>'
-if (-not (Test-Path $prefabViewportPath)) { throw "prefab_viewport.js not found at $prefabViewportPath -- required" }
-if ($html.IndexOf($prefabViewportTag) -lt 0) { throw "mockup.html does not contain $prefabViewportTag -- cannot inline prefab viewport" }
-$prefabViewport = Get-Content -Raw -Path $prefabViewportPath
-if ($prefabViewport.IndexOf(')SNAPMAPPLUS') -ge 0) { throw "prefab_viewport.js contains the raw-literal delimiter )SNAPMAPPLUS -- cannot embed" }
-if ($prefabViewport.IndexOf('</script') -ge 0) { throw "prefab_viewport.js contains '</script' -- would terminate the inline script tag early" }
-$html = $html.Replace($prefabViewportTag, "<script>`n$prefabViewport</script>")
-if ($html.IndexOf($prefabViewportTag) -ge 0) { throw "prefab_viewport.js inlining left a residual src tag" }
+# Inline the Prefab Details transform + WebGL units for the same NavigateToString reason. Separate source
+# files keep the pure matrix contract directly testable while the shipped page remains one document.
+foreach ($prefabScriptName in @("prefab_transform.js", "prefab_viewport.js")) {
+    $prefabScriptPath = Join-Path $here ("webview\" + $prefabScriptName)
+    $prefabScriptTag = '<script src="' + $prefabScriptName + '"></script>'
+    if (-not (Test-Path $prefabScriptPath)) { throw "$prefabScriptName not found at $prefabScriptPath -- required" }
+    if ($html.IndexOf($prefabScriptTag) -lt 0) { throw "mockup.html does not contain $prefabScriptTag -- cannot inline it" }
+    $prefabScript = Get-Content -Raw -Path $prefabScriptPath
+    if ($prefabScript.IndexOf(')SNAPMAPPLUS') -ge 0) { throw "$prefabScriptName contains the raw-literal delimiter )SNAPMAPPLUS -- cannot embed" }
+    if ($prefabScript.IndexOf('</script') -ge 0) { throw "$prefabScriptName contains '</script' -- would terminate the inline script tag early" }
+    $html = $html.Replace($prefabScriptTag, "<script>`n$prefabScript</script>")
+    if ($html.IndexOf($prefabScriptTag) -ge 0) { throw "$prefabScriptName inlining left a residual src tag" }
+}
 
 # MSVC caps a single string literal at ~16 KB (error C2026). Split into <16 KB chunks emitted as
 # ADJACENT raw string literals -- the compiler concatenates them into one array. Raw literals need no
