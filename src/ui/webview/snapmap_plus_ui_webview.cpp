@@ -89,13 +89,17 @@ static std::vector<int> g_delete_eids;
 
 static volatile bool g_pending_select = false;   /* list -> editor selection push ("Select in editor") */
 static std::vector<int> g_select_eids;
-static volatile bool g_pending_deselect = false;  /* explicit "Deselect" button -- clear_selection convenience */
+static volatile bool g_pending_deselect = false;  /* UI blank-space deselect -- clear_selection convenience */
 static volatile bool g_select_refused   = false;  /* last selection push was refused (editor mid-grab/hold) */
 static char g_enumbuf[262144];                   /* packed-string scratch for enum_inherits / enum_valid_classes */
 
-static volatile bool g_cam_lock = false;         /* Camera Origin "Lock Position" */
+/* Intentionally retained camera-manipulation backend. The current page exposes only a read-only footer
+ * readout, but camSet/camLock, the cached target, one-shot writes, and per-frame locking stay wired so a
+ * future control can return without re-deriving the engine interface. Keep this dormant path intact. */
+static volatile bool g_cam_lock = false;
 static float         g_cam_xyz[3] = {0.0f, 0.0f, 0.0f};
-static volatile bool g_cam_write_once = false;   /* a committed field edit -> write the vec3 once */
+static volatile bool g_cam_write_once = false;
+static volatile bool g_cam_read_published = false;  /* force one readout after each page navigation */
 
 static volatile bool g_pending_create_prefab = false;
 static std::string   g_create_prefab_name;
@@ -646,8 +650,8 @@ static bool poc_collect_state_growing(int id, char *cls, int ccap, char *inh, in
 }
 static void poc_post_json(const wchar_t *json);   /* fwd */
 
-/* Camera Origin: write the stored vec3 to the editor (+0x00). Used every frame while Lock is on, and once
- * per committed field edit. SEH-guarded. */
+/* Camera Origin: retained write path (+0x00). Used every frame while a future client enables Lock, and
+ * once per camSet message. The current read-only footer does neither. SEH-guarded. */
 static void poc_cam_write()
 {
     __try {
@@ -655,7 +659,7 @@ static void poc_cam_write()
             g_iface->vtbl->set_editor_vec3(g_iface, g_cam_xyz);
     } __except (EXCEPTION_EXECUTE_HANDLER) { }
 }
-/* Camera Origin: read the live vec3 (+0x08); if it moved, cache + push it to the fields. SEH-guarded. */
+/* Camera Origin: read the live vec3 (+0x08); if it moved, cache + push it to the footer. SEH-guarded. */
 static void poc_cam_read_send()
 {
     float cam[3] = {0.0f, 0.0f, 0.0f};
@@ -664,11 +668,15 @@ static void poc_cam_read_send()
         if (g_iface && g_iface->vtbl && g_iface->vtbl->get_editor_vec3) { g_iface->vtbl->get_editor_vec3(g_iface, cam); ok = 1; }
     } __except (EXCEPTION_EXECUTE_HANDLER) { ok = 0; }
     if (!ok) return;
-    if (fabsf(cam[0]-g_cam_xyz[0]) < 1e-4f && fabsf(cam[1]-g_cam_xyz[1]) < 1e-4f && fabsf(cam[2]-g_cam_xyz[2]) < 1e-4f) return;
+    if (g_cam_read_published &&
+        fabsf(cam[0]-g_cam_xyz[0]) < 1e-4f &&
+        fabsf(cam[1]-g_cam_xyz[1]) < 1e-4f &&
+        fabsf(cam[2]-g_cam_xyz[2]) < 1e-4f) return;
     g_cam_xyz[0] = cam[0]; g_cam_xyz[1] = cam[1]; g_cam_xyz[2] = cam[2];
     wchar_t m[192];
     _snwprintf_s(m, _countof(m), _TRUNCATE, L"{\"kind\":\"camera\",\"x\":%.6f,\"y\":%.6f,\"z\":%.6f}", cam[0], cam[1], cam[2]);
     poc_post_json(m);
+    g_cam_read_published = true;
 }
 
 static int poc_get_selection(int *out, int max)
@@ -874,11 +882,11 @@ static void poc_apply_select_in_editor()
     } __except (EXCEPTION_EXECUTE_HANDLER) { poc_log("select-in-editor: SEH in apply"); }
     poc_log("select-in-editor: apply done");
 }
-/* explicit Deselect: clear_selection only, no re-add. A convenience (deselect without going back to the 3D
- * view) and the escape hatch if the editor's mode state is ever out of sync. NB: this button used to be the
- * ONLY way to clear a list-driven selection -- a native empty-space click wouldn't do it. That root cause was
- * found and fixed 2026-07-27 (iface_engine.c syncs the EntityMode selection state alongside the selection
- * array; see ED_MODE_OBJ_OFF there), so a native click now deselects normally. */
+/* UI blank-space deselect: clear_selection only, no re-add. This keeps the page and 3D-editor selection
+ * aligned without a dedicated button. A visible Deselect button used to be the ONLY way to clear a
+ * list-driven selection because a native empty-space click did nothing. That root cause was fixed
+ * 2026-07-27 (iface_engine.c syncs the EntityMode selection state alongside the selection array; see
+ * ED_MODE_OBJ_OFF there), so the native viewport and this page-level gesture now both deselect normally. */
 static void poc_apply_deselect()
 {
     __try {
@@ -2440,10 +2448,12 @@ static HRESULT on_message(ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventA
                 poc_request_preview(n8.c_str(), asset_kind);
             } else if (cmd == L"cancelPreview") {
                 poc_cancel_preview();
+            /* These camera write commands are deliberately dormant, not removed: the current page is
+             * read-only, while future UI or another trusted WebView client can reuse the backend. */
             } else if (cmd == L"camLock") {
                 int on = 0; json_get_int(json, L"on", &on);
                 g_cam_lock = (on != 0);
-                if (g_cam_lock) {   /* freeze to the current field values */
+                if (g_cam_lock) {   /* capture the target coordinates supplied with the request */
                     double x, y, z;
                     if (json_get_double(json, L"x", &x)) g_cam_xyz[0] = (float)x;
                     if (json_get_double(json, L"y", &y)) g_cam_xyz[1] = (float)y;
@@ -2581,6 +2591,7 @@ static HRESULT on_nav_completed(ICoreWebView2 *,
     }
     /* The hidden native host may be shown only after the fully parsed, pre-themed page can receive
      * messages. This keeps a blank/light controller from becoming the first visible frame. */
+    g_cam_read_published = false;  /* the new page needs an initial footer value even if the camera is unchanged */
     g_page_loaded = true;
     g_webview_ready = true;
     poc_post_config_status();
@@ -2678,7 +2689,7 @@ static void poc_think_loop()
         if (g_pending_open_timeline) { g_tl_json_len = poc_serialize_entity_raw(g_open_timeline_eid); g_pending_open_timeline = false; did_open_timeline = true; }
         if (g_pending_resolve_entity) { g_resolve_json_len = poc_serialize_entity_resolve(g_resolve_entity_eid); g_pending_resolve_entity = false; did_resolve_entity = true; }
         if (g_pending_save_timeline) { poc_apply_save_timeline(); g_pending_save_timeline = false; did_save_timeline = true; }
-        /* Camera Origin: hold the locked origin every frame (or flush one committed edit). */
+        /* Retained camera writer: hold a future-requested lock, or flush one camSet edit. */
         if (g_cam_lock || g_cam_write_once) { poc_cam_write(); g_cam_write_once = false; }
         LeaveCriticalSection(&g_loop->mtx);
 

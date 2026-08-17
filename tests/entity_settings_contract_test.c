@@ -121,12 +121,9 @@ int main(int argc, char **argv)
     const char *else_open;
     const char *else_end;
     const char *follow_assign;
-    const char *follow_hide;
     const char *follow_post;
     const char *off_post;
     const char *select_assign;
-    const char *else_display;
-    const char *else_visibility;
     const char *guarded_push;
     if (argc != 2) {
         fprintf(stderr,
@@ -162,6 +159,20 @@ int main(int argc, char **argv)
           html,
           "persistEntitySetting(ENTITY_SELECTION_MODE_KEY, mode)") == 2);
     CHECK(count_text(html, "localStorage") == 2);
+    CHECK(strstr(html, "id=\"deselectBtn\"") == NULL);
+    CHECK(strstr(html, "function isEntityWhitespaceTarget(target)") != NULL);
+    CHECK(strstr(html,
+          "if (target.closest('#panel-entities .right-pane')) return false;") != NULL);
+    CHECK(strstr(html, "[role=\"separator\"]") != NULL);
+    CHECK(strstr(html,
+          "function clearEntitySelectionFromWhitespace()") != NULL);
+    CHECK(strstr(html,
+          "document.querySelector('.app').addEventListener('click'") != NULL);
+    CHECK(strstr(html,
+          "if (selCount() && isEntityWhitespaceTarget(e.target))") != NULL);
+    CHECK(count_text(html, "post({cmd:'deselect'});") == 1);
+    CHECK(strstr(html,
+          "if (editor.classList.contains('focus-mode')) setDeclFocus(false);") != NULL);
 
     apply = strstr(
         html,
@@ -188,20 +199,12 @@ int main(int argc, char **argv)
     else_end = matching_brace(else_open);
     follow_assign = find_in_body(
         follow_open, follow_end, "selectMode = false;");
-    follow_hide = find_in_body(
-        follow_open, follow_end,
-        "document.getElementById('deselectBtn').style.display = 'none';");
     follow_post = find_in_body(
         follow_open, follow_end, "post({cmd:'setSync', on:1});");
     off_post = find_in_body(
         else_open, else_end, "post({cmd:'setSync', on:0});");
     select_assign = find_in_body(
         else_open, else_end, "selectMode = select;");
-    else_display = find_in_body(
-        else_open, else_end,
-        "document.getElementById('deselectBtn').style.display =");
-    else_visibility = find_in_body(
-        else_open, else_end, "select ? 'inline-block' : 'none';");
     guarded_push = find_in_body(
         else_open, else_end,
         "if (select && pushSelection) pushSelectionToEditor();");
@@ -213,12 +216,9 @@ int main(int argc, char **argv)
     CHECK(else_branch != NULL);
     CHECK(else_end != NULL);
     CHECK(follow_assign != NULL);
-    CHECK(follow_hide != NULL);
     CHECK(follow_post != NULL);
     CHECK(off_post != NULL);
     CHECK(select_assign != NULL);
-    CHECK(else_display != NULL);
-    CHECK(else_visibility != NULL);
     CHECK(guarded_push != NULL);
     if (select_predicate && sync_checked)
         CHECK(select_predicate < sync_checked);
@@ -226,17 +226,11 @@ int main(int argc, char **argv)
         CHECK(sync_checked < select_checked);
     if (select_checked && follow_if)
         CHECK(select_checked < follow_if);
-    if (follow_assign && follow_hide)
-        CHECK(follow_assign < follow_hide);
-    if (follow_hide && follow_post)
-        CHECK(follow_hide < follow_post);
+    if (follow_assign && follow_post)
+        CHECK(follow_assign < follow_post);
     if (off_post && select_assign) CHECK(off_post < select_assign);
-    if (select_assign && else_display)
-        CHECK(select_assign < else_display);
-    if (else_display && else_visibility)
-        CHECK(else_display < else_visibility);
-    if (else_visibility && guarded_push)
-        CHECK(else_visibility < guarded_push);
+    if (select_assign && guarded_push)
+        CHECK(select_assign < guarded_push);
 
     free(html);
     if (g_failed) {

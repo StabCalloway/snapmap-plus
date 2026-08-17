@@ -105,7 +105,117 @@ int main(int argc, char **argv)
     CHECK(strstr(html, "valueJson:JSON.stringify(value)") != NULL);
     CHECK(strstr(html, "applyTheme(false, true)") != NULL);
     CHECK(strstr(html, "applyTheme(true, true)") != NULL);
+    CHECK(strstr(html, "else configSet('theme', value);") != NULL);
     CHECK(strstr(html, "function setTheme(") == NULL);
+    CHECK(strstr(html, "class=\"menu-label\" data-menu=\"view\"") != NULL);
+    CHECK(strstr(html, "id=\"menu-view\" role=\"menu\" hidden") != NULL);
+    CHECK(strstr(html, "id=\"menuLight\" role=\"menuitemradio\"") != NULL);
+    CHECK(strstr(html, "id=\"menuDark\" role=\"menuitemradio\"") != NULL);
+    CHECK(strstr(html, "function initMenus()") != NULL);
+    CHECK(strstr(html, "document.getElementById('menuLight').setAttribute('aria-checked'") != NULL);
+    CHECK(strstr(html, "document.getElementById('menuDark').setAttribute('aria-checked'") != NULL);
+    CHECK(strstr(html, "theme-toggle") == NULL);
+    CHECK(strstr(html, "segLight") == NULL);
+    CHECK(strstr(html, "segDark") == NULL);
+    CHECK(strstr(html,
+          ".icon-button { display: inline-grid; place-items: center;") != NULL);
+    CHECK(strstr(html,
+          ".btn:active:not(:disabled) { border-color: var(--accent); }") != NULL);
+    CHECK(strstr(html, "transform: translateY(1px)") == NULL);
+    CHECK(strstr(html,
+          ".btn.primary:hover:not(:disabled) { filter: brightness(1.16); }") != NULL);
+    CHECK(strstr(html, "id=\"icon-circle-help\"") != NULL);
+    CHECK(strstr(html,
+          "class=\"icon-button\" id=\"reportBtn\"") != NULL);
+    CHECK(strstr(html, ">?</button>") == NULL);
+    CHECK(strstr(html,
+          "class=\"tl-tab-del icon-button\"") != NULL);
+    CHECK(strstr(html,
+          "class=\"tl-inner-tab tl-add icon-button\"") != NULL);
+    CHECK(strstr(html, "class=\"ev-del icon-button\"") != NULL);
+    CHECK(strstr(html,
+          "class=\"pf-folder-del icon-button\"") != NULL);
+    CHECK(strstr(html, "<span class=\"tl-tab-del\"") == NULL);
+    CHECK(strstr(html, "<div class=\"ev-del\"") == NULL);
+    CHECK(strstr(html, "<span class=\"pf-folder-del\"") == NULL);
+    CHECK(strstr(html,
+          "revertBtn.classList.toggle('icon-button', on);") != NULL);
+    CHECK(strstr(html,
+          "saveBtn.classList.toggle('icon-button', on);") != NULL);
+    CHECK(strstr(html, "id=\"camLockChk\"") == NULL);
+    CHECK(strstr(html, "class=\"camera\"") == NULL);
+    CHECK(strstr(html, ".camera {") == NULL);
+    CHECK(strstr(html, "<input type=\"text\" id=\"camX\"") == NULL);
+    CHECK(strstr(html, "<input type=\"text\" id=\"camY\"") == NULL);
+    CHECK(strstr(html, "<input type=\"text\" id=\"camZ\"") == NULL);
+    CHECK(strstr(html,
+          "<div class=\"status-group status-main\">") != NULL);
+    CHECK(strstr(html, "id=\"connText\"") == NULL);
+    CHECK(strstr(html, "(Connected)") == NULL);
+    CHECK(strstr(html, "aria-label=\"Connecting\"") != NULL);
+    CHECK(strstr(html,
+          "bridgeDot.setAttribute('aria-label', 'Connected');") != NULL);
+    CHECK(strstr(html,
+          "<div class=\"status-group status-camera\"") != NULL);
+    CHECK(strstr(html,
+          "<div class=\"status-group status-right\">") != NULL);
+    CHECK(strstr(html, "<span>X: <b id=\"camX\">--</b></span>") != NULL);
+    CHECK(strstr(html, "<span>Y: <b id=\"camY\">--</b></span>") != NULL);
+    CHECK(strstr(html, "<span>Z: <b id=\"camZ\">--</b></span>") != NULL);
+    CHECK(count_text(html, "id=\"camX\"") == 1);
+    CHECK(count_text(html, "id=\"camY\"") == 1);
+    CHECK(count_text(html, "id=\"camZ\"") == 1);
+    CHECK(strstr(html, "<span id=\"stamp\">Updated: --</span>") != NULL);
+    CHECK(strstr(html,
+          ".status-camera { gap: 12px; margin-left: 22px; padding-left: 22px; border-left: 1px solid var(--border); }") != NULL);
+    CHECK(strstr(html,
+          "width: 100%; height: 100%; overflow: hidden;") != NULL);
+    CHECK(strstr(html,
+          ".app { display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden;") != NULL);
+    CHECK(strstr(html,
+          ".content { position: relative; flex: 1 1 0; display: flex; min-width: 0; min-height: 0; overflow: hidden;") != NULL);
+    CHECK(strstr(html, ".editor-col.focus-mode {") != NULL);
+    CHECK(strstr(html,
+          "position: absolute; inset: 14px; z-index: 1800;") != NULL);
+    CHECK(strstr(html, "position: fixed; inset: 14px;") == NULL);
+    CHECK(strstr(html,
+          ".statusbar { display: grid; grid-template-columns: minmax(0, 1fr) auto;") != NULL);
+    CHECK(strstr(html,
+          "grid-template-columns: repeat(3, minmax(0, 1fr));") != NULL);
+    CHECK(strstr(html,
+          ".panel-head { display: flex; align-items: center; gap: 8px; height: 40px; min-height: 40px;") != NULL);
+    CHECK(strstr(html,
+          ".split-workspace { --split-primary: 40%; display: flex;") != NULL);
+    CHECK(strstr(html,
+          ".primary-split > .left-pane { width: var(--split-primary); flex: 0 0 var(--split-primary);") != NULL);
+    CHECK(strstr(html,
+          ".pane-splitter { position: relative; z-index: 7; width: 1px; flex: 0 0 1px;") != NULL);
+    CHECK(strstr(html,
+          ".pane-splitter::before { content: \"\"; position: absolute; top: 0; bottom: 0; left: -6px; right: -6px; }") != NULL);
+    CHECK(strstr(html,
+          ".pane-splitter:hover, .pane-splitter:focus-visible, .pane-splitter.dragging { background: var(--accent); box-shadow: -1px 0 var(--accent), 1px 0 var(--accent); }") != NULL);
+    CHECK(count_text(html, "data-split-workspace") == 8);
+    CHECK(count_text(html, "data-split-variable=\"--split-primary\"") == 3);
+    CHECK(strstr(html, "data-split-variable=\"--split-rail\"") != NULL);
+    CHECK(strstr(html, "data-split-variable=\"--split-inspector\"") != NULL);
+    CHECK(strstr(html, "data-split-side=\"after\"") != NULL);
+    CHECK(strstr(html, "function initSplitWorkspaces()") != NULL);
+    CHECK(strstr(html,
+          "document.querySelectorAll('.pane-splitter').forEach(function(splitter)") != NULL);
+    CHECK(strstr(html, "splitter.setPointerCapture(e.pointerId);") != NULL);
+    CHECK(strstr(html, "e.key === 'ArrowLeft'") != NULL);
+    CHECK(strstr(html, "e.key === 'ArrowRight'") != NULL);
+    CHECK(strstr(html, "else if (e.key === 'Home')") != NULL);
+    CHECK(strstr(html, "else if (e.key === 'End')") != NULL);
+    CHECK(strstr(html, "workspace.style.removeProperty(variable);") != NULL);
+    CHECK(strstr(html, "function setCamReadout(id, v)") != NULL);
+    CHECK(strstr(html,
+          "setCamReadout('camX', d.x); setCamReadout('camY', d.y); setCamReadout('camZ', d.z);") != NULL);
+    CHECK(strstr(html, "function camVal(") == NULL);
+    CHECK(strstr(html, "post({cmd:'camLock'") == NULL);
+    CHECK(strstr(html, "post({cmd:'camSet'") == NULL);
+    CHECK(strstr(html,
+          "o.cmd === 'camLock' || o.cmd === 'camSet'") != NULL);
 
     CHECK(strstr(html, "d.kind === 'configValue'") != NULL);
     CHECK(strstr(html, "d.kind === 'configSetResult'") != NULL);

@@ -12,7 +12,7 @@
 <title>Snapmap+</title>
 <style>
   * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; font-family: "Segoe UI", Tahoma, Arial, sans-serif; font-size: 11px; height: 100%; }
+  html, body { margin: 0; padding: 0; font-family: "Segoe UI", Tahoma, Arial, sans-serif; font-size: 11px; width: 100%; height: 100%; overflow: hidden; }
   :root {
     --bg:#eef0f3; --chrome:#f7f8fa; --panel:#ffffff; --panel2:#fbfbfc; --border:#e4e6ea; --border2:#d3d6db;
     --text:#1b1d21; --muted:#6b7280; --accent:#2f7ad6; --accentText:#ffffff; --sel:#e7f0fb; --selText:#123a63;
@@ -27,19 +27,31 @@
     --tkKey:#7cb5ff; --tkStr:#ce9178; --tkNum:#9fd394; --tkBool:#c39ce8; --sqErr:#f14c4c; --sqWarn:#d7a944;
     color-scheme: dark;
   }
-  .app { display: flex; flex-direction: column; height: 100vh; background: var(--bg); color: var(--text); user-select: none; -webkit-user-select: none; }
+  /* The native host owns the outer window size. Keep the document exactly inside WebView2's current
+     client rectangle so only the panes below scroll; document scrollbars would steal footer space and
+     make the HTML resize grips appear to fight the Windows sizing loop. */
+  .app { display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; background: var(--bg); color: var(--text); user-select: none; -webkit-user-select: none; }
   .icon-sprite { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
   .ui-icon { width: 16px; height: 16px; display: block; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+  .icon-button { display: inline-grid; place-items: center; padding: 0; line-height: 1; text-align: center; }
+  .icon-button .ui-icon { margin: auto; }
 
-  .menubar { display: flex; align-items: center; height: 30px; background: var(--chrome); border-bottom: 1px solid var(--border); padding: 0 6px; gap: 8px; flex-shrink: 0; user-select: none; }
-  .menubar .icon { width: 16px; height: 16px; border-radius: 3px; margin-left: 4px; display: block; }
-  .menubar .brand { font-weight: 600; }
-  .spacer { flex: 1; }
-  .theme-toggle { display: inline-flex; border: 1px solid var(--border2); border-radius: 20px; overflow: hidden; cursor: pointer; }
-  .theme-toggle span { padding: 3px 11px; color: var(--muted); }
-  .theme-toggle span.on { background: var(--accent); color: var(--accentText); }
+  .menubar { position: relative; z-index: 1800; display: flex; align-items: center; min-width: 0; height: 30px; background: var(--chrome); border-bottom: 1px solid var(--border); padding: 0 6px; gap: 8px; flex-shrink: 0; user-select: none; }
+  .menubar .icon { width: 16px; height: 16px; border-radius: 3px; margin-left: 4px; display: block; flex-shrink: 0; }
+  .menubar .brand { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; margin-right: 3px; }
+  .spacer { flex: 1; min-width: 0; }
+  .app-menus { display: flex; align-items: center; align-self: stretch; gap: 2px; padding: 3px 0; }
+  .menu { position: relative; display: flex; align-items: center; }
+  .menu-label { min-width: 36px; height: 24px; padding: 0 8px; border: 0; border-radius: 5px; background: transparent; color: var(--text); font: inherit; text-align: center; cursor: default; }
+  .menu-label:hover, .menu-label.open { background: var(--sel); color: var(--selText); }
+  .menu-popup { position: absolute; left: 0; top: 27px; min-width: 168px; padding: 3px; background: var(--panel); border: 1px solid var(--border2); box-shadow: 2px 5px 16px rgba(0,0,0,.26); z-index: 1900; }
+  .menu-popup[hidden] { display: none; }
+  .menu-popup button { width: 100%; min-height: 25px; display: flex; align-items: center; gap: 7px; padding: 3px 8px; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: default; }
+  .menu-popup button:hover, .menu-popup button:focus-visible { background: var(--sel); color: var(--selText); outline: 0; }
+  .menu-popup button[role="menuitemradio"]::before { content: ""; width: 12px; flex: 0 0 12px; text-align: center; }
+  .menu-popup button[role="menuitemradio"][aria-checked="true"]::before { content: "\2713"; }
   .win-controls { display: flex; align-items: stretch; align-self: stretch; gap: 0; margin-left: 8px; margin-right: -6px; padding: 0; }
-  .win-btn { width: 38px; height: 30px; display: flex; align-items: center; justify-content: center; padding: 0 12px; border-radius: 0; color: var(--muted); cursor: default; }
+  .win-btn { width: 38px; height: 30px; display: inline-grid; place-items: center; padding: 0 12px; border-radius: 0; color: var(--muted); cursor: default; }
   .win-btn .ui-icon { width: 14px; height: 14px; stroke-width: 1.8; }
   .win-btn:hover { background: var(--panel2); color: var(--text); }
   .win-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
@@ -53,7 +65,7 @@
   .rz-bl { bottom: 0; left: 0; width: 9px; height: 9px; cursor: nesw-resize; }
   .rz-br { bottom: 0; right: 0; width: 9px; height: 9px; cursor: nwse-resize; }
 
-  .tabstrip { display: flex; align-items: center; background: var(--chrome); border-bottom: 1px solid var(--border); flex-shrink: 0; padding: 0 6px; gap: 2px; }
+  .tabstrip { display: flex; align-items: center; min-width: 0; background: var(--chrome); border-bottom: 1px solid var(--border); flex-shrink: 0; padding: 0 6px; gap: 2px; }
   .tab { padding: 7px 14px; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; }
   .tab.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
   .tab:hover:not(.active) { color: var(--text); }
@@ -66,15 +78,18 @@
    * (open browsing) and once inside a modal opened from the Entities tab (scoped to the selection).
    * Everything below is built from the existing tokens and .panel/.entity-item/.btn skeleton so the
    * browser reads as part of the app rather than a bolted-on pane. */
-  .ab-grid { display: flex; gap: 8px; align-items: stretch; flex: 1; min-height: 0; }
-  .ab-rail { width: 138px; flex: 0 0 138px; }
+  .ab-grid { --split-rail: 138px; --split-inspector: 268px; display: flex; gap: 0; align-items: stretch; flex: 1; min-height: 0; }
+  .ab-rail { width: var(--split-rail); flex: 0 0 var(--split-rail); }
   .ab-mid  { flex: 1 1 auto; min-width: 200px; }
-  .ab-insp { width: 268px; flex: 0 0 268px; }
+  .ab-insp { width: var(--split-inspector); flex: 0 0 var(--split-inspector); }
   /* Narrow window: drop the type rail first (only one type is indexed, and the filter reaches
      everything anyway). The inspector is never dropped -- it holds the preview and the copy
      button, which are the whole point of the pane. */
-  @media (max-width: 1000px) { .ab-rail { display: none; } }
-  @media (max-width: 760px)  { .ab-insp { width: 208px; flex: 0 0 208px; } }
+  @media (max-width: 1000px) { .ab-rail, .ab-rail-splitter { display: none; } }
+  @media (max-width: 760px)  {
+    .ab-grid { --split-inspector: 42%; }
+    .ab-mid, .ab-insp { min-width: 0; }
+  }
 
   .ab-rail .rail-head { font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
                         color: var(--muted); padding: 8px 7px 3px; }
@@ -112,7 +127,7 @@
      with a name here, so it must not be buried behind selecting the asset first. */
   .ab-row .cp { width: 23px; height: 21px; margin-left: auto; opacity: 0; border: 1px solid var(--border2);
                 background: var(--panel); color: var(--muted); border-radius: 4px; padding: 0; cursor: pointer;
-                display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+                display: inline-grid; place-items: center; flex-shrink: 0; }
   .ab-row .cp .ui-icon { width: 12px; height: 12px; }
   .entity-item:hover .cp, .entity-item.selected .cp { opacity: 1; }
   .ab-row .cp:hover { border-color: var(--accent); color: var(--text); }
@@ -129,8 +144,7 @@
   .ab-row .ab-pin, .ab-row .ab-pin-gap { width: 18px; flex: 0 0 18px; }
   .ab-row .ab-pin { opacity: 0; border: 0; background: none; color: var(--muted);
                     padding: 0; line-height: 1; height: 16px; cursor: pointer;
-                    font-family: inherit; display: inline-flex; align-items: center;
-                    justify-content: center; }
+                    font-family: inherit; display: inline-grid; place-items: center; }
   .ab-row .ab-pin .ui-icon { width: 16px; height: 16px; }
   .entity-item:hover .ab-pin { opacity: .55; }
   .ab-row .ab-pin:hover { opacity: 1; color: var(--accent); }
@@ -157,7 +171,7 @@
                  gap: 10px; background: var(--panel2); }
   .ab-audition.playing { border-color: var(--accent); }
   .ab-audition .ab-play { width: 54px; height: 54px; border-radius: 50%; font-size: 17px; line-height: 1;
-                          padding: 0; display: flex; align-items: center; justify-content: center; }
+                          padding: 0; display: inline-grid; place-items: center; }
   .ab-audition .ab-play .ui-icon { width: 18px; height: 18px; }
   .ab-audition.playing .ab-play { border-color: var(--accent); color: var(--accent); }
   .ab-audition-note { color: var(--muted); font-size: 11px; }
@@ -180,26 +194,35 @@
                   overflow: hidden; }
   .modal.assets .modal-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px;
                               border-bottom: 1px solid var(--border); background: var(--panel2); flex-shrink: 0; }
-  .modal.assets .ab-grid { padding: 8px; }
+  .modal.assets .ab-grid { margin: 8px; }
   .modal.assets .modal-foot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
                               padding: 8px 12px; border-top: 1px solid var(--border);
                               background: var(--panel2); flex-shrink: 0; }
   .modal.assets .modal-foot .grow { flex: 1; min-width: 140px; color: var(--muted);
                                     font-family: Consolas, "Courier New", monospace;
                                     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* the global camera group lives in the tabstrip's spare right-side space */
-  .camera { display: flex; align-items: center; gap: 8px; padding: 2px 6px; color: var(--muted); }
-  .camera label { display: flex; align-items: center; gap: 4px; color: var(--text); }
-  .camera input[type=text] { width: 76px; }
-  .camera .cam-lock { color: var(--muted); }
+  .content { position: relative; flex: 1 1 0; display: flex; min-width: 0; min-height: 0; overflow: hidden; background: var(--bg); padding: 8px; }
 
-  .content { flex: 1; display: flex; overflow: hidden; background: var(--bg); min-height: 0; padding: 8px; gap: 8px; }
+  /* Shared split workspace. Adjacent sections are one surface with one divider, not two cards separated
+     by a gutter. The divider gets a generous transparent hit track around its visible rule; one generic
+     JS controller below drives every instance, including both dividers in the asset browser. */
+  .split-workspace { --split-primary: 40%; display: flex; align-items: stretch; flex: 1 1 0; min-width: 0; min-height: 0; overflow: hidden; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+  .split-workspace > .panel { border: 0; border-radius: 0; }
+  .primary-split > .left-pane { width: var(--split-primary); flex: 0 0 var(--split-primary); min-width: 0; }
+  .primary-split > .right-pane { flex: 1 1 0; min-width: 0; }
+  .pane-splitter { position: relative; z-index: 7; width: 1px; flex: 0 0 1px; background: var(--border2); cursor: col-resize; touch-action: none; transition: background-color .12s ease, box-shadow .12s ease; }
+  /* The divider occupies only its visible pixel, so neighboring header/body rules meet it instead of
+     stopping across a painted gutter. This transparent pseudo-element supplies the forgiving 13px hit
+     area without interrupting any horizontal color or border behind it. */
+  .pane-splitter::before { content: ""; position: absolute; top: 0; bottom: 0; left: -6px; right: -6px; }
+  .pane-splitter:hover, .pane-splitter:focus-visible, .pane-splitter.dragging { background: var(--accent); box-shadow: -1px 0 var(--accent), 1px 0 var(--accent); }
+  .pane-splitter:focus-visible { outline: none; }
+  body.pane-resizing, body.pane-resizing * { cursor: col-resize !important; }
 
   /* shared panel skeleton: header (title + count badge, actions right) -> toolbar (filter on top) -> body */
-  .left-pane { width: 40%; min-width: 260px; }
   .right-pane { flex: 1; min-width: 0; }
-  .panel { display: flex; flex-direction: column; min-height: 0; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-  .panel-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; min-height: 36px; border-bottom: 1px solid var(--border); background: var(--panel2); flex-shrink: 0; }
+  .panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .panel-head { display: flex; align-items: center; gap: 8px; height: 40px; min-height: 40px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--panel2); flex: 0 0 40px; }
   .panel-title { font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
   .badge { background: var(--sel); color: var(--selText); border-radius: 10px; padding: 1px 7px; font-size: 10px; }
   .panel-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
@@ -233,28 +256,30 @@
 
   .btn { padding: 4px 12px; border: 1px solid var(--border2); background: var(--panel2); color: var(--text); cursor: pointer; border-radius: 5px; font-size: 11px; }
   .btn:hover:not(:disabled) { border-color: var(--accent); }
-  .btn:active:not(:disabled) { transform: translateY(1px); }
+  .btn:active:not(:disabled) { border-color: var(--accent); }
   .btn:disabled { opacity: 0.5; cursor: default; }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accentText); }
+  .btn.primary:hover:not(:disabled) { filter: brightness(1.16); }
   .btn.danger:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
-  .btn.icon { width: 27px; height: 27px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+  .btn.icon { width: 27px; height: 27px; padding: 0; display: inline-grid; place-items: center; }
   .btn.icon .ui-icon { width: 14px; height: 14px; }
 
   .placeholder { display: flex; align-items: center; justify-content: center; text-align: center; color: var(--muted); font-style: italic; padding: 20px; }
   .editor-col { display: flex; flex-direction: column; min-height: 0; height: 100%; }
   /* distraction-free Decl Text editor: the Decl Text label/problem-count/editor/problems bar stay exactly
      where they are in the flex column -- only the identity/fields/description chrome above and below them
-     is hidden, and the whole column takes over the viewport so the editor gets the freed-up space. The
+     is hidden, and the whole column takes over the content region so the editor gets the freed-up space
+     without covering the application header or footer. The
      textarea itself is never touched, so its scroll position, selection, undo history and listeners survive
      the toggle untouched. Save/Revert/dirty-note (normally in the covered .panel-head) are the one thing
      that DOES move -- .focus-head below receives them for the duration, then they're moved back on exit
      (see setDeclFocus()); they're the same nodes with the same listeners, just reparented. */
   .editor-col.focus-mode {
-    position: fixed; inset: 14px; z-index: 1800; background: var(--panel);
+    position: absolute; inset: 14px; z-index: 1800; background: var(--panel);
     border: 1px solid var(--border2); border-radius: 8px; box-shadow: 0 8px 28px rgba(0,0,0,0.35);
     padding: 12px;
     /* height:auto so BOTH insets govern -- the base .editor-col's height:100% would otherwise win over
-       the bottom inset and push the panel's bottom edge (border + 12px padding) below the viewport,
+       the bottom inset and push the panel's bottom edge (border + 12px padding) below the content region,
        which read as "no bottom padding" while top/sides showed theirs. */
     height: auto;
   }
@@ -268,8 +293,8 @@
      to the distraction-free toggle button itself, and holds the reparented Save/Revert/dirty-note only for
      the duration of focus mode (prob-count's margin-left:auto already pushes this + the toggle button to
      the row's right edge, so it reads as one control cluster). No pill/background of its own -- Revert/Save
-     get the "icon" class added while here (see setDeclFocus()), the SAME class declFocusBtn already uses,
-     so they come out the identical rounded-square shape/height, no separate styling to keep in sync. */
+     get the shared "icon icon-button" classes while here (see setDeclFocus()), the SAME classes
+     declFocusBtn already uses, so they come out the identical rounded-square shape/height. */
   .focus-head { display: none; align-items: center; gap: 6px; }
   .editor-col.focus-mode .focus-head { display: flex; }
   .focus-head .hint { font-size: 10px; }
@@ -359,9 +384,9 @@
   .combo { position: relative; display: inline-flex; }
   .combo.grow { flex: 1; min-width: 150px; }
   .combo input { flex: 1; border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: none; min-width: 0; }
-  .combo-arrow { width: 24px; border: 1px solid var(--border2); border-top-right-radius: 5px; border-bottom-right-radius: 5px; background: var(--panel2); cursor: pointer; color: var(--muted); padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+  .combo-arrow { width: 24px; border: 1px solid var(--border2); border-top-right-radius: 5px; border-bottom-right-radius: 5px; background: var(--panel2); cursor: pointer; color: var(--muted); padding: 0; display: inline-grid; place-items: center; }
   .combo-arrow .ui-icon { width: 12px; height: 12px; }
-  .combo-arrow:hover { color: var(--text); }
+  .combo-arrow:hover { border-color: var(--accent); color: var(--text); }
   /* the base .combo-list opens DOWNWARD: every combo now sits at the TOP of its panel (the Entities-tab
      Inherit/Classname fields moved above the decl editor), so down is always the roomy direction. */
   .combo-list { position: absolute; top: 100%; left: 0; min-width: 100%; width: max-content; max-width: 560px; max-height: 260px; overflow-y: auto; background: var(--panel); border: 1px solid var(--border2); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.18); z-index: 1500; display: none; padding: 3px; }
@@ -377,9 +402,9 @@
   .tl-inner-tab { display: flex; align-items: center; gap: 6px; padding: 4px 8px 4px 11px; color: var(--muted); cursor: default; border-bottom: 2px solid transparent; }
   .tl-inner-tab.active { color: var(--text); border-bottom-color: var(--accent); }
   .tl-inner-tab:hover:not(.active) { color: var(--text); }
-  .tl-inner-tab.tl-add { font-weight: 600; }
+  .tl-inner-tab.tl-add { display: inline-grid; place-items: center; padding: 4px 9px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; font-weight: 600; }
   .tl-inner-tab.tl-add .ui-icon { width: 13px; height: 13px; }
-  .tl-tab-del { width: 15px; height: 15px; display: flex; align-items: center; justify-content: center; border-radius: 3px; color: var(--muted); flex-shrink: 0; }
+  .tl-tab-del { width: 15px; height: 15px; border: 0; background: transparent; border-radius: 3px; color: var(--muted); cursor: pointer; flex-shrink: 0; }
   .tl-tab-del .ui-icon { width: 11px; height: 11px; }
   .tl-tab-del:hover { background: #a3352f; color: #fff; }
   .tl-inner-body { flex: 1; display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow: auto; padding-top: 2px; }
@@ -403,7 +428,7 @@
   .ev-vecn-fields { display: flex; gap: 6px; flex: 1; min-width: 0; }
   .ev-vecn-fields input.ev-arg-input { flex: 1; min-width: 0; text-align: center; }   /* per-component (x/y/z, r/g/b/a, ...) -- placeholder names the component, no separate <label> per field */
   .ev-arg-row .combo.ev-arg-combo { flex: 1; min-width: 0; }   /* decl/enum -- fills the row same as the plain-text arg inputs */
-  .ev-del { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; color: var(--muted); cursor: default; border-radius: 5px; flex-shrink: 0; }
+  .ev-del { width: 22px; height: 22px; border: 0; background: transparent; color: var(--muted); cursor: pointer; border-radius: 5px; flex-shrink: 0; }
   .ev-del .ui-icon { width: 13px; height: 13px; }
   .ev-del:hover { background: #a3352f; color: #fff; }
 
@@ -438,7 +463,7 @@
   .pf-item.dragging { opacity: 0.4; }
   .pf-folder.drop-target > .pf-folder-head { background: var(--sel); color: var(--selText); }
   #prefabTree.drop-target-root { outline: 1px dashed var(--accent); outline-offset: -1px; }
-  .pf-folder-del { width: 20px; height: 20px; margin-left: auto; padding: 0; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); opacity: 0; }
+  .pf-folder-del { width: 20px; height: 20px; margin-left: auto; padding: 0; border: 0; background: transparent; color: var(--muted); cursor: pointer; opacity: 0; }
   .pf-folder-del .ui-icon { width: 12px; height: 12px; }
   .pf-folder-head:hover .pf-folder-del { opacity: 1; }
   .pf-folder-del:hover { color: #a3352f; }
@@ -459,11 +484,11 @@
   .modal textarea { min-height: 54px; resize: vertical; }
   .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 
-  /* feedback: the "?" launcher (the statusbar's rightmost item, the footer counterpart of the menubar
-     logo) + its report dialog. */
+  /* feedback: the Lucide help launcher (the statusbar's rightmost item, the footer counterpart of the
+     menubar logo) + its report dialog. */
   #reportBtn { width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--border2);
-    background: var(--panel); color: var(--muted); font-size: 11px; font-weight: 600; padding: 0;
-    display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
+    background: var(--panel); color: var(--muted); padding: 0; cursor: pointer; flex-shrink: 0; }
+  #reportBtn .ui-icon { width: 12px; height: 12px; }
   #reportBtn:hover { color: var(--text); border-color: var(--accent); }
   .modal.report { width: 430px; }
   .modal.report textarea { min-height: 110px; }
@@ -483,13 +508,56 @@
   .ctxmenu div { padding: 5px 12px; border-radius: 4px; cursor: default; }
   .ctxmenu div:hover { background: var(--sel); color: var(--selText); }
 
-  .statusbar { flex-shrink: 0; display: flex; align-items: center; gap: 14px; background: var(--panel2); border-top: 1px solid var(--border); color: var(--muted); padding: 6px 10px; font-size: 11px; }
+  .statusbar { flex-shrink: 0; display: flex; align-items: center; min-width: 0; max-width: 100%; overflow: hidden; background: var(--panel2); border-top: 1px solid var(--border); color: var(--muted); padding: 6px 10px; font-size: 11px; }
+  .status-group { display: flex; align-items: center; gap: 14px; white-space: nowrap; }
+  .status-main { min-width: 0; }
+  .status-main > span:first-child { display: flex; align-items: center; min-width: 0; }
+  .status-main > span:last-child { flex: none; }
+  .status-main #verText { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  /* Camera is a read-only footer group now. The divider + two-sided spacing keep its rapidly changing
+     numbers from visually running into the connection/selection group on the left. */
+  .status-camera { gap: 12px; margin-left: 22px; padding-left: 22px; border-left: 1px solid var(--border); }
+  .status-camera b { display: inline-block; min-width: 72px; font-family: Consolas, "Courier New", monospace; font-variant-numeric: tabular-nums; }
+  .status-right { margin-left: auto; gap: 10px; padding-left: 22px; }
   .statusbar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; margin-right: 5px; }
   .statusbar .dot.ok { background: #2e9e5b; }
   .statusbar .dot.no { background: #c9483d; }
   .statusbar b { color: var(--text); }
   .statusbar .muted { color: var(--muted); }
-  .statusbar .spacer { flex: 1; }
+
+  /* Snapmap-midi can rely on a 960x640 native minimum. Plus intentionally permits much smaller
+     windows, so its chrome has to reflow: tabs and panes shrink in place, while the camera group gets
+     a full-width footer row instead of widening the document beyond the WebView client rectangle. */
+  @media (max-width: 760px) {
+    .tabstrip { padding-inline: 2px; }
+    .tab { flex: 1 1 0; min-width: 0; padding: 6px 4px; overflow: hidden; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+    .primary-split > .left-pane, .primary-split > .right-pane { min-width: 0; }
+
+    .statusbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 5px 10px; padding: 5px 8px; }
+    .status-main { grid-column: 1; grid-row: 1; gap: 10px; overflow: hidden; }
+    .status-camera { grid-column: 1 / -1; grid-row: 2; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; gap: 8px; margin-left: 0; padding: 5px 0 0; border-top: 1px solid var(--border); border-left: 0; }
+    .status-camera > span { display: flex; min-width: 0; gap: 3px; }
+    .status-camera b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .status-right { grid-column: 2; grid-row: 1; min-width: 0; margin-left: 0; padding-left: 0; }
+    #stamp { display: block; max-width: 112px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  }
+  @media (max-width: 420px) {
+    .menubar { gap: 5px; }
+    .statusbar { gap: 4px 7px; padding-inline: 6px; font-size: 10px; }
+    .status-main { gap: 7px; }
+    .status-camera { gap: 5px; }
+    #stamp { max-width: 78px; }
+  }
+  @media (max-height: 420px) {
+    .menubar, .win-btn { height: 26px; }
+    .app-menus { padding-block: 2px; }
+    .menu-label { height: 22px; }
+    .menu-popup { top: 25px; }
+    .tab { padding-block: 4px; }
+    .content { padding: 5px; gap: 5px; }
+    .statusbar { padding-top: 3px; padding-bottom: 3px; }
+    .status-camera { padding-top: 3px; }
+  }
 
   #toastHost { position: fixed; top: 40px; right: 12px; display: flex; flex-direction: column; gap: 8px; z-index: 2000; pointer-events: none; }
   .toast { min-width: 150px; max-width: 320px; padding: 8px 12px; background: #333; color: #fff; border-radius: 6px; font-size: 11px; box-shadow: 0 4px 14px rgba(0,0,0,0.32); opacity: 0; transform: translateX(120%); transition: opacity .28s ease, transform .28s cubic-bezier(.2,.8,.2,1); }
@@ -547,6 +615,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   <symbol id="icon-play" viewBox="0 0 24 24"><path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"></path></symbol>
   <symbol id="icon-triangle-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></symbol>
   <symbol id="icon-circle-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></symbol>
+  <symbol id="icon-circle-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 1 1 5.83 1c0 2-3 3-3 3"></path><path d="M12 17h.01"></path></symbol>
   <symbol id="icon-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"></path></symbol>
   <symbol id="icon-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></symbol>
   <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M5 12h14"></path><path d="M12 5v14"></path></symbol>
@@ -563,14 +632,19 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     <!-- the Snapmap+ logo rides inline as a data URI: the page is loaded from a string, so no external file or URL would resolve -->
     <img class="icon" alt="" src="data:image/jpeg;base64,/9j/2wCEAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDIBCQkJDAsMGA0NGDIhHCEyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMv/AABEIAEAAQAMBIgACEQEDEQH/xAGiAAABBQEBAQEBAQAAAAAAAAAAAQIDBAUGBwgJCgsQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+gEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoLEQACAQIEBAMEBwUEBAABAncAAQIDEQQFITEGEkFRB2FxEyIygQgUQpGhscEJIzNS8BVictEKFiQ04SXxFxgZGiYnKCkqNTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqCg4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2dri4+Tl5ufo6ery8/T19vf4+fr/2gAMAwEAAhEDEQA/APCwKdilAqaCEzShAcZ6k9h3NaGYkdpcSpujgldT3VCRT/sF3/z6T/8Afs1Zms5rhldECxBcRhnAO3t19etRHS5/7qf9/F/xquWXYj2kO5Wlt5YSBLE8ZPTepGaZivRvA+gaRqvh/WdM1K4sLW9meL7PPL5bSJg5O3JB5xg4I61p+JvhUbPQtOXQ7aW9vw+25lEgAcH+LaTgDOBx26+tRezsy1qro8lIpMVr69oN54d1V9OvhH5yKGzG+4EHof8A9dZZFMBR1q2P3EAX/lpKMn2T/wCv/SoYEVnLP/q0G5v8PxoMjSytI3VjmmtxPY7Cz0zTtbhntBdLbanFdMIww4lQ4VV/Aj8M12K/DDRhZhHubpp8cyhgBn/dx0/zmvMUuls/EYuXDFIbvewU4JAbJAr0ePULaXQGkS9vRYSRPOSbofaFcH/VqcY24HT/AGhXo0XCSd1qj53HLEU3H2c2kzltV8KwaVol4wMl7eCUIWiiO23UEkljzjIHfHFbXw1l1nTYJtWvNRa18N26nzFnyyyHphB257jqeOe13wbq0J8WahBNcahp91dTiWKCQDEigE7HDA846dDjoah+Jkeo6nZaa1hBcixV5I2s0ixskViNxC9iM47enWuCvJOfKlZHt4SM40lKcrt6mh4s0/wrq3hi/wDGMcNxPLcwqEZHI2SZCgkdBg4BzxxxzXjJr1v4VS6haW+padd2kyRfLNEJoyqlujDkd8LXnnieS/n8Q3VxqVj9iuZmDmEIVAGMAjPXp19c1kux0vuZcTAEo/3H4Pt6GrNlp9zdzyRQwvK0S73RPvbQQCR69apirtrd3FrIl1bTPFcQ8b0ODjoD/SrjZPUzqczi+Xc0/E2jSaRqEZZnK3UQuFDrtZd2cqw7EGuj8IWdvbeGr7VLmC1vWBUxxEb3jIJ6jtnsO9Ja61a68JdD19vmEh+yXp+8hJ4yfQ8c9/1qKO31zwNBdO9jbT2kzqryNhgQCccA5AOe4r0IQjGXOtvyPCq1alSl7Cek7ry5lfozodI1SHxBBLqktjbQXdu6Mtw/ynCsDjfjv06eoqh4q8ZazpNtYW9vdCK+lVric+WpCKxOxBkdhxn296wtc8a/bLe5sbCzjhs5gvzOv7zIIOc59RxV/RLhPHGlvo+po5vrZN1vfBN2B6Of8ev1Fc2KlGTTWtt2d2W0qlOMuZcqb0W9tDe+H2v65rjX02pXXnQxBVjHlqvzHJPKgdgPzrznxRNqkuvzprE6TXcOIyyY246gDAHHP1rvNSfRvD3hS60CHVTBfJGJGMYId5Dg9umcAYzkDFeWO7yOXdmdyclmOSa5Vvc9NjRUkb+W4bGR0I9R3FRA07NUI0PMu9oWOIyx4wr+QGJHbnGav6pq+papc/aHtZo5GiWOYKjFZNuCMqR7A46ZFc/06Gl59TVqpJK1zJ0KbkpNao7Pw5HpSaTqWpa7p4l+zNGFUJsPORgLwDz61r6l41s7DQ7NvDq2sLyPmS3MeCg75A4zkV5nj3pRWbV3dmq0VkaWt6vLrmqSX00ccbuANqDjAGB9TWcaC1MLZpgf/9k=">
     <div class="brand">Snapmap+</div>
-    <div class="spacer"></div>
-    <div class="theme-toggle" id="themeToggle">
-      <span class="on" id="segLight">Light</span>
-      <span id="segDark">Dark</span>
+    <div class="app-menus" id="appMenus">
+      <div class="menu">
+        <button type="button" class="menu-label" data-menu="view" aria-haspopup="menu" aria-expanded="false">View</button>
+        <div class="menu-popup" id="menu-view" role="menu" hidden>
+          <button type="button" id="menuLight" role="menuitemradio" aria-checked="true"><span>Light Theme</span></button>
+          <button type="button" id="menuDark" role="menuitemradio" aria-checked="false"><span>Dark Theme</span></button>
+        </div>
+      </div>
     </div>
+    <div class="spacer"></div>
     <div class="win-controls">
-      <div class="win-btn" id="winMin" title="Minimize" role="button" tabindex="0"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-minus"></use></svg></div>
-      <div class="win-btn" id="winMax" title="Maximize" role="button" tabindex="0"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-square"></use></svg></div>
+      <div class="win-btn icon-button" id="winMin" title="Minimize" aria-label="Minimize" role="button" tabindex="0"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-minus"></use></svg></div>
+      <div class="win-btn icon-button" id="winMax" title="Maximize" aria-label="Maximize" role="button" tabindex="0"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-square"></use></svg></div>
     </div>
   </div>
 
@@ -582,22 +656,15 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     <div class="tab active" data-tab="entities">Entities</div>
     <div class="tab" data-tab="prefabs">Prefabs</div>
     <div class="tab" data-tab="timelines">Timelines</div>
-    <div class="spacer"></div>
-    <div class="camera">
-      <span class="cam-title">Camera</span>
-      <label>X <input type="text" id="camX" value="797.638489"></label>
-      <label>Y <input type="text" id="camY" value="183.456985"></label>
-      <label>Z <input type="text" id="camZ" value="-950.475159"></label>
-      <label class="cam-lock"><input type="checkbox" id="camLockChk"> Lock</label>
-    </div>
   </div>
 
   <div class="content" id="panel-entities">
+    <div class="split-workspace primary-split" data-split-workspace>
     <div class="panel left-pane">
       <div class="panel-head">
         <span class="panel-title">Entities</span><span class="badge" id="entBadge">0</span>
         <div class="panel-actions">
-          <button class="btn icon" id="refreshBtn" title="Refresh the entity list" aria-label="Refresh the entity list"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-refresh-cw"></use></svg></button>
+          <button type="button" class="btn icon icon-button" id="refreshBtn" title="Refresh the entity list" aria-label="Refresh the entity list"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-refresh-cw"></use></svg></button>
         </div>
       </div>
       <div class="panel-toolbar">
@@ -606,7 +673,6 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
           <label><input type="checkbox" id="showHidden"> Show hidden</label>
           <label title="The list follows whatever you select in the SnapMap 3D editor"><input type="checkbox" id="syncEditor"> Follow selection</label>
           <label title="Selecting entities here selects them in the SnapMap 3D editor"><input type="checkbox" id="selectInEditor"> Select in 3D</label>
-          <button class="btn icon" id="deselectBtn" style="display:none;" title="Clear the 3D editor selection">Deselect</button>
           <!-- Far right of this row, not over in the Entity State panel-head: next to Save to Decl it
                sat among the commit buttons and read as one of them, so it went unnoticed. -->
           <button class="btn" id="browseAssetsBtn" style="margin-left:auto" disabled title="Select an entity first">Browse assets...</button>
@@ -614,6 +680,13 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       </div>
       <div class="panel-body list" id="entityList"><div class="list-empty">Waiting for the map...</div></div>
     </div>
+
+    <div class="pane-splitter" role="separator" tabindex="0"
+         aria-label="Resize Entities and Entity State" aria-orientation="vertical"
+         aria-valuemin="180" aria-valuemax="1200" aria-valuenow="576"
+         data-split-variable="--split-primary" data-split-side="before"
+         data-min-before="180" data-min-after="280" data-split-label="Entities"
+         title="Drag to resize Entities and Entity State; double-click to reset"></div>
 
     <div class="panel right-pane">
       <div class="panel-head" id="entityStateHead">
@@ -630,18 +703,18 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
           <div class="ident-sub">
             <label>ID</label>
             <input type="text" id="fEntityId" readonly>
-            <button type="button" class="btn icon" id="copyIdBtn" title="Copy this entity's ID to the clipboard" aria-label="Copy this entity's ID"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-copy"></use></svg></button>
+            <button type="button" class="btn icon icon-button" id="copyIdBtn" title="Copy this entity's ID to the clipboard" aria-label="Copy this entity's ID"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-copy"></use></svg></button>
           </div>
         </div>
         <div class="fields">
-          <div class="field grow"><label>Inherit</label><div class="combo grow" id="cInherit"><input type="text" id="fInherit" autocomplete="off"><button type="button" class="combo-arrow" aria-label="Show inherit options"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron-down"></use></svg></button><div class="combo-list"></div></div></div>
-          <div class="field grow"><label>Classname</label><div class="combo grow" id="cClassname"><input type="text" id="fClassname" autocomplete="off"><button type="button" class="combo-arrow" aria-label="Show classname options"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron-down"></use></svg></button><div class="combo-list"></div></div></div>
+          <div class="field grow"><label>Inherit</label><div class="combo grow" id="cInherit"><input type="text" id="fInherit" autocomplete="off"><button type="button" class="combo-arrow icon-button" aria-label="Show inherit options"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron-down"></use></svg></button><div class="combo-list"></div></div></div>
+          <div class="field grow"><label>Classname</label><div class="combo grow" id="cClassname"><input type="text" id="fClassname" autocomplete="off"><button type="button" class="combo-arrow icon-button" aria-label="Show classname options"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron-down"></use></svg></button><div class="combo-list"></div></div></div>
           <div class="field grow"><label>Displayname</label><input type="text" id="fDisplayname"></div>
         </div>
-        <div class="section-label">Decl Text
+        <div class="section-label"><span>Decl Text</span>
           <span class="prob-count" id="probCount"></span>
           <div class="focus-head" id="focusHead"></div>
-          <button type="button" class="btn icon" id="declFocusBtn" title="Focus mode (Esc to exit)" aria-label="Enter focus mode"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-maximize-2"></use></svg></button>
+          <button type="button" class="btn icon icon-button" id="declFocusBtn" title="Focus mode (Esc to exit)" aria-label="Enter focus mode"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-maximize-2"></use></svg></button>
         </div>
         <div class="code-editor" id="codeEditor">
           <div class="ce-gutter" aria-hidden="true"><div id="declGutter"></div></div>
@@ -650,16 +723,18 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
           <div class="ac-popup" id="acPopup"></div>
         </div>
         <div class="problems" id="problemsBar"></div>
-        <div style="height:8px; flex-shrink:0;"></div>
+        <div class="editor-spacer" style="height:8px; flex-shrink:0;"></div>
         <div class="desc-panel" id="descPanel">
           <div class="desc-toggle" id="descToggle"><span class="desc-caret"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron-right"></use></svg></span>Inherit / Class Descriptions</div>
           <div class="desc-body" id="descBody"></div>
         </div>
       </div>
     </div>
+    </div>
   </div>
 
   <div class="content" id="panel-prefabs" style="display:none;">
+    <div class="split-workspace primary-split" data-split-workspace>
     <div class="panel left-pane">
       <div class="panel-head">
         <span class="panel-title">Prefabs</span><span class="badge" id="pfBadge">0</span>
@@ -673,6 +748,12 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       </div>
       <div class="panel-body list" id="prefabTree"></div>
     </div>
+    <div class="pane-splitter" role="separator" tabindex="0"
+         aria-label="Resize Prefabs and Prefab Details" aria-orientation="vertical"
+         aria-valuemin="220" aria-valuemax="1200" aria-valuenow="576"
+         data-split-variable="--split-primary" data-split-side="before"
+         data-min-before="220" data-min-after="280" data-split-label="Prefabs"
+         title="Drag to resize Prefabs and Prefab Details; double-click to reset"></div>
     <div class="panel right-pane">
       <div class="panel-head">
         <span class="panel-title">Prefab Details</span>
@@ -694,15 +775,17 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         <input type="text" id="pcTags" placeholder="comma, separated, tags -- the filter box matches them">
       </div>
     </div>
+    </div>
   </div>
 
   <!-- Assets tab: open browsing. The same three-column browser is mounted again inside
        #assetModal, scoped to the Entities-tab selection. See abMount(). -->
   <div class="content" id="panel-assets" style="display:none;">
-    <div class="ab-grid" id="abTabHost"></div>
+    <div class="ab-grid split-workspace" id="abTabHost" data-split-workspace></div>
   </div>
 
   <div class="content" id="panel-timelines" style="display:none;">
+    <div class="split-workspace primary-split" data-split-workspace>
     <div class="panel left-pane">
       <div class="panel-head">
         <span class="panel-title">Timelines</span><span class="badge" id="tlBadge">0</span>
@@ -715,6 +798,12 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       </div>
       <div class="panel-body list" id="timelineList"><div class="list-empty">Waiting for the map...</div></div>
     </div>
+    <div class="pane-splitter" role="separator" tabindex="0"
+         aria-label="Resize Timelines and Timeline Editor" aria-orientation="vertical"
+         aria-valuemin="200" aria-valuemax="1200" aria-valuenow="576"
+         data-split-variable="--split-primary" data-split-side="before"
+         data-min-before="200" data-min-after="320" data-split-label="Timelines"
+         title="Drag to resize Timelines and Timeline Editor; double-click to reset"></div>
     <div class="panel right-pane">
       <div class="panel-head">
         <span class="panel-title">Timeline</span>
@@ -729,14 +818,23 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         <div class="tl-inner-body" id="tlBody"></div>
       </div>
     </div>
+    </div>
   </div>
 
   <div class="statusbar">
-    <span><span class="dot" id="bridgeDot"></span><b id="verText">Snapmap+</b> <span id="connText">connecting...</span></span>
-    <span>Selected: <b id="selCount">0</b></span>
-    <span class="spacer"></span>
-    <span id="stamp"></span>
-    <button type="button" id="reportBtn" title="Report a bug or suggest a feature">?</button>
+    <div class="status-group status-main">
+      <span><span class="dot" id="bridgeDot" role="status" aria-label="Connecting" title="Connecting"></span><b id="verText">Snapmap+</b></span>
+      <span>Selected: <b id="selCount">0</b></span>
+    </div>
+    <div class="status-group status-camera" title="Live camera origin (read-only)" aria-label="Live camera origin">
+      <span>X: <b id="camX">--</b></span>
+      <span>Y: <b id="camY">--</b></span>
+      <span>Z: <b id="camZ">--</b></span>
+    </div>
+    <div class="status-group status-right">
+      <span id="stamp">Updated: --</span>
+      <button type="button" class="icon-button" id="reportBtn" title="Report a bug or suggest a feature" aria-label="Report a bug or suggest a feature"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-circle-help"></use></svg></button>
+    </div>
   </div>
 </div>
 
@@ -751,9 +849,9 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     <div class="modal-head">
       <span class="modal-title" style="margin:0">Browse assets</span>
       <span class="muted" id="amFor" style="font-family:Consolas,'Courier New',monospace"></span>
-      <div style="margin-left:auto"><button class="btn icon" id="amClose" title="Close (Esc)" aria-label="Close asset browser"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-x"></use></svg></button></div>
+      <div style="margin-left:auto"><button type="button" class="btn icon icon-button" id="amClose" title="Close (Esc)" aria-label="Close asset browser"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-x"></use></svg></button></div>
     </div>
-    <div class="ab-grid" id="abModalHost"></div>
+    <div class="ab-grid split-workspace" id="abModalHost" data-split-workspace></div>
     <div class="modal-foot">
       <span class="grow" id="amPath">Nothing selected.</span>
       <button class="btn" id="amCancel">Close</button>
@@ -971,13 +1069,10 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     document.getElementById('selectInEditor').checked = select;
     if (follow) {
       selectMode = false;
-      document.getElementById('deselectBtn').style.display = 'none';
       post({cmd:'setSync', on:1});
     } else {
       post({cmd:'setSync', on:0});
       selectMode = select;
-      document.getElementById('deselectBtn').style.display =
-        select ? 'inline-block' : 'none';
       if (select && pushSelection) pushSelectionToEditor();
     }
   }
@@ -1456,7 +1551,10 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     'textures/whitecollar/wc_panel_maint_1e\ntextures/whitecollar/wc_panel_maint_tall_1a\n' +
     'textures/whitecollar/wc_panel_tall_1d\nweapons/har/harbase\nweapons/har/harbase_bloody\n';
   function previewHandle(o) {
-    if (o.cmd === 'refresh') { onMessage(previewList()); }
+    if (o.cmd === 'refresh') {
+      onMessage(previewList());
+      onMessage({kind:'camera', x:797.638489, y:183.456985, z:-950.475159});
+    }
     else if (o.cmd === 'openTimeline') {
       var tj = previewTimelineJson[o.eid];
       onMessage(tj ? {kind:'timelineData', eid:o.eid, ok:true, json:tj} : {kind:'timelineData', eid:o.eid, ok:false});
@@ -1685,7 +1783,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       ]});
     }
     else if (o.cmd === 'selectInEditor') { /* no 3D editor in browser preview */ }
-    else if (o.cmd === 'camLock' || o.cmd === 'camSet') { /* no editor in browser preview */ }
+    else if (o.cmd === 'camLock' || o.cmd === 'camSet') { /* retained future editing bridge; no editor in browser preview */ }
     else if (o.cmd === 'winState') { onMessage({kind:'windowState', maximized:windowMaximized}); }
     else if (o.cmd === 'winMax') { onMessage({kind:'windowState', maximized:!windowMaximized}); }
     else if (o.cmd === 'winMin' || o.cmd === 'winDrag' || o.cmd === 'winResize') { /* no native window in preview */ }
@@ -2707,7 +2805,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       return '<div class="ev-arg-row"><label>' + label + '</label>'
            + '<div class="combo ev-arg-combo" data-resclass="' + esc(assetResKey) + '">'
            +   '<input type="text" class="ev-arg-input" data-argidx="' + argIdx + '" data-assetkey="' + esc(asset.commitKey) + '" autocomplete="off" value="' + esc(assetDisp) + '">'
-           +   '<button type="button" class="combo-arrow" aria-label="Show options">' + iconSvg('chevron-down') + '</button><div class="combo-list"></div>'
+           +   '<button type="button" class="combo-arrow icon-button" aria-label="Show options">' + iconSvg('chevron-down') + '</button><div class="combo-list"></div>'
            + '</div></div>';
     }
     if (kind === 'bool') {
@@ -2729,7 +2827,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       return '<div class="ev-arg-row"><label>' + label + '</label>'
            + '<div class="combo ev-arg-combo" data-resclass="' + esc(declKey) + '">'
            +   '<input type="text" class="ev-arg-input" data-argidx="' + argIdx + '" data-declkey="' + esc(declKey) + '" autocomplete="off" value="' + esc(String(declVal)) + '">'
-           +   '<button type="button" class="combo-arrow" aria-label="Show options">' + iconSvg('chevron-down') + '</button><div class="combo-list"></div>'
+           +   '<button type="button" class="combo-arrow icon-button" aria-label="Show options">' + iconSvg('chevron-down') + '</button><div class="combo-list"></div>'
            + '</div></div>';
     }
     if (kind === 'enum') {
@@ -2741,7 +2839,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       return '<div class="ev-arg-row"><label>' + label + '</label>'
            + '<div class="combo ev-arg-combo" data-resclass="' + esc(enumType) + '">'
            +   '<input type="text" class="ev-arg-input" data-argidx="' + argIdx + '" autocomplete="off" value="' + esc(String(enumVal)) + '">'
-           +   '<button type="button" class="combo-arrow" aria-label="Show options">' + iconSvg('chevron-down') + '</button><div class="combo-list"></div>'
+           +   '<button type="button" class="combo-arrow icon-button" aria-label="Show options">' + iconSvg('chevron-down') + '</button><div class="combo-list"></div>'
            + '</div></div>';
     }
     if (kind === 'entity') {
@@ -2763,7 +2861,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       return '<div class="ev-arg-row"><label>' + label + '</label>'
            + '<div class="combo ev-arg-combo" data-resclass="entity">'
            +   '<input type="text" class="ev-arg-input" data-argidx="' + argIdx + '" autocomplete="off" value="' + esc(entDisp) + '">'
-           +   '<button type="button" class="combo-arrow" aria-label="Show options">' + iconSvg('chevron-down') + '</button><div class="combo-list"></div>'
+           +   '<button type="button" class="combo-arrow icon-button" aria-label="Show options">' + iconSvg('chevron-down') + '</button><div class="combo-list"></div>'
            + '</div></div>';
     }
     if (kind === 'vecn') {
@@ -3155,9 +3253,9 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     for (var i = 0; i < tlModel.tabs.length; i++) {
       var cls = 'tl-inner-tab' + (i === tlModel.active ? ' active' : '');
       html += '<div class="' + cls + '" data-tlidx="' + i + '">Item ' + i
-            + '<span class="tl-tab-del" title="Remove this entity event list">' + iconSvg('x') + '</span></div>';
+            + '<button type="button" class="tl-tab-del icon-button" title="Remove this entity event list" aria-label="Remove this entity event list">' + iconSvg('x') + '</button></div>';
     }
-    html += '<div class="tl-inner-tab tl-add" title="Add an entity-event list">' + iconSvg('plus') + '</div>';
+    html += '<button type="button" class="tl-inner-tab tl-add icon-button" title="Add an entity-event list" aria-label="Add an entity-event list">' + iconSvg('plus') + '</button>';
     tabsEl.innerHTML = html;
   }
   // The OG "Runs on" entity-picker (FUN_180008180, live-decompiled from the original snaphakui.dll for
@@ -3186,7 +3284,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     var entityText = tab.entity ? tlEntityLabel(tab.entity) : '';
 
     var h = '<div class="entity-picker">'
-       + '<div class="combo grow"><input type="text" id="tlRunsOn" value="' + esc(entityText) + '" placeholder="(no entity)" autocomplete="off"><button type="button" class="combo-arrow" aria-label="Show entity options">' + iconSvg('chevron-down') + '</button><div class="combo-list"></div></div>'
+       + '<div class="combo grow"><input type="text" id="tlRunsOn" value="' + esc(entityText) + '" placeholder="(no entity)" autocomplete="off"><button type="button" class="combo-arrow icon-button" aria-label="Show entity options">' + iconSvg('chevron-down') + '</button><div class="combo-list"></div></div>'
        + '<div class="entity-picker-opts">'
        +   '<button type="button" class="btn" id="tlUseSelection" title="Set Runs on to the entity currently selected in the SnapMap editor (must be exactly one)">Use current selection</button>'
        + '</div>'
@@ -3210,8 +3308,8 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         h += '<div class="event-row" data-evidx="' + j + '">'
            + '<div class="ev-top">'
            +   '<label>Time</label><input type="text" class="ev-time" value="' + esc(String(ev.time)) + '">'
-           +   '<div class="combo"><input type="text" class="ev-eventdef" value="' + esc(ev.eventDef) + '" autocomplete="off" placeholder="(pick an event)"><button type="button" class="combo-arrow" aria-label="Show event options">' + iconSvg('chevron-down') + '</button><div class="combo-list"></div></div>'
-           +   '<div class="ev-del" title="Remove event call">' + iconSvg('x') + '</div>'
+           +   '<div class="combo"><input type="text" class="ev-eventdef" value="' + esc(ev.eventDef) + '" autocomplete="off" placeholder="(pick an event)"><button type="button" class="combo-arrow icon-button" aria-label="Show event options">' + iconSvg('chevron-down') + '</button><div class="combo-list"></div></div>'
+           +   '<button type="button" class="ev-del icon-button" title="Remove event call" aria-label="Remove event call">' + iconSvg('x') + '</button>'
            + '</div>';
         if (ev.args.length === 0) {
           h += '<div class="ev-args-list muted">no parameters</div>';
@@ -3368,6 +3466,32 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     primaryEid = -1;
     updateSelDom();
     showPlaceholder('Select an entity from the list.');
+  }
+  // Blank structural surfaces are the app-wide escape hatch for entity selection. Controls, rows,
+  // editable text, and menus keep their own click behavior. The complete Entity State pane is also
+  // protected: it is inspection/editing space for the current entity, including its blank padding and
+  // the expanded Decl Text layout, so ordinary work there must never destroy the state being inspected.
+  function isEntityWhitespaceTarget(target) {
+    if (!target || !target.matches || !target.closest('.app')) return false;
+    if (target.closest('#panel-entities .right-pane')) return false;
+    if (target.closest('.menubar, button, input, textarea, select, label, a, [role="button"], [role="separator"], [contenteditable="true"], .entity-item, .pf-item, .tl-inner-tab, .event-row, .combo-list, .desc-panel')) return false;
+    return target.matches(
+      '.tabstrip, .content, .panel, .panel-head, .panel-toolbar, .opts-row, ' +
+      '.panel-body, .panel-actions, .list, .editor-col, .fields, .field, ' +
+      '.ident, .ident-sub, .section-label, .focus-head, .problems, ' +
+      '.prefab-card, .pc-header, .pc-chips, .ab-grid, .ab-sect, ' +
+      '.statusbar, .status-group, .spacer, .placeholder, .list-empty, .tl-inner-body, ' +
+      '.event-list, .editor-spacer');
+  }
+  function clearEntitySelectionFromWhitespace() {
+    if (!selCount()) return;
+    var editor = document.getElementById('editor');
+    if (editor.classList.contains('focus-mode')) setDeclFocus(false);
+    post({cmd:'deselect'});
+    selectedEids = {};
+    anchorEid = -1;
+    updateSelDom();
+    refreshEditorForSelection(false);   // native was told directly, so do not push an empty selection again
   }
   // The state editor edits ONE decl, so it only shows for a single selection. 2+ selected -> a placeholder
   // that points at the right-click menu (the multi-entity actions). Called after any selection change.
@@ -3531,11 +3655,13 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         toast("Settings couldn't be saved; changes apply only for this session.", 'warn');
     } else if (d.kind === 'list') {
       var listStarted = uiPerfNow();
-      document.getElementById('bridgeDot').className = 'dot ok';
+      var bridgeDot = document.getElementById('bridgeDot');
+      bridgeDot.className = 'dot ok';
+      bridgeDot.setAttribute('aria-label', 'Connected');
+      bridgeDot.title = 'Connected';
       appVersion = d.version || '';   // rides along in feedback reports
       document.getElementById('verText').textContent = 'Snapmap+ ' + (d.version || '');
-      document.getElementById('connText').textContent = '(Connected)';
-      flash('updated ' + new Date().toLocaleTimeString());
+      flash('Updated: ' + new Date().toLocaleTimeString());
       allEntities = d.entities || [];
       // drop selections for entities that no longer exist
       var exist = {}; for (var i=0;i<allEntities.length;i++) exist[allEntities[i].eid]=true;
@@ -3555,9 +3681,9 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       // the SnapMap editor screen just came back (Play ended, or a map load/reload just completed) --
       // force EVERY panel that caches loaded-then-editable entity state closed, so nobody edits/saves
       // stale data. Covers both the Timeline Editor (tlCloseEditor) and the Entity State panel
-      // (closeEntityEditor) -- audited 2026-07-13: Prefabs is file-based + reads live selection at
-      // click-time (no cached entity snapshot) and Camera Origin posts each change immediately (no
-      // load-then-save-later state), so neither needs this treatment.
+      // (closeEntityEditor) -- audited 2026-08-17: Prefabs is file-based + reads live selection at
+      // click-time (no cached entity snapshot), and Camera Origin is now a read-only live value with no
+      // load-then-save-later state, so neither needs this treatment.
       tlCloseEditor();
       closeEntityEditor();
     } else if (d.kind === 'state') {
@@ -3682,7 +3808,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     } else if (d.kind === 'info') {
       toast(d.text || '', 'warn');
     } else if (d.kind === 'camera') {
-      setCamField('camX', d.x); setCamField('camY', d.y); setCamField('camZ', d.z);
+      setCamReadout('camX', d.x); setCamReadout('camY', d.y); setCamReadout('camZ', d.z);
     } else if (d.kind === 'prefabs') {
       prefabTags = d.meta || {};
       renderPrefabList(d.root || [], d.folders || []);
@@ -3719,7 +3845,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       editorSelCount = d.count; updateCreateBtn();
       // "Select in 3D": the 3D editor owns the selection, so a native deselect there (an empty-space click)
       // has to clear the list highlight too -- otherwise the list keeps showing entities that are no longer
-      // selected. Mirrors exactly what the Deselect button does. Gated three ways: only in select mode
+      // selected. Mirrors the UI blank-space deselect behavior. Gated three ways: only in select mode
       // ("Follow selection" already mirrors the whole editor selection via editorSelect, empty case included;
       // with both off the list selection is purely local and editor activity must not disturb it), only on a
       // real >0 -> 0 transition, and only when the list actually has something highlighted to clear.
@@ -3838,7 +3964,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       if (filter && items.length === 0) continue;
       anyShown = true;
       h += '<div class="pf-folder pf-open" data-folder-name="' + esc(folder.name) + '">'
-         + '<div class="pf-folder-head"><span class="pf-caret">' + iconSvg('chevron-down') + '</span> <span class="pf-fname">' + esc(folder.name) + '</span><span class="pf-folder-del" title="Delete folder">' + iconSvg('x') + '</span></div>'
+         + '<div class="pf-folder-head"><span class="pf-caret">' + iconSvg('chevron-down') + '</span> <span class="pf-fname">' + esc(folder.name) + '</span><button type="button" class="pf-folder-del icon-button" title="Delete folder" aria-label="Delete folder">' + iconSvg('x') + '</button></div>'
          + '<div class="pf-folder-body">';
       for (var j = 0; j < items.length; j++) h += '<div class="pf-item" draggable="true" data-folder="' + esc(folder.name) + '">' + esc(items[j]) + '</div>';
       h += '</div></div>';
@@ -3915,8 +4041,10 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     window.chrome.webview.addEventListener('message', function(e){ onMessage(e.data); });
   } else {
     // browser preview: populate + auto-select the Block Box so the panel shows populated on load.
-    document.getElementById('connText').textContent = '(Disconnected)';
-    document.getElementById('bridgeDot').className = 'dot ok';
+    var previewDot = document.getElementById('bridgeDot');
+    previewDot.className = 'dot ok';
+    previewDot.setAttribute('aria-label', 'Browser preview');
+    previewDot.title = 'Browser preview';
     setTimeout(function(){
       onMessage(previewList());
       selectedEids = {}; selectedEids[65] = true; anchorEid = 65; updateSelDom();
@@ -3976,10 +4104,9 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     applyEntitySelectionMode(mode, this.checked);
     persistEntitySetting(ENTITY_SELECTION_MODE_KEY, mode);
   });
-  document.getElementById('deselectBtn').addEventListener('click', function(){
-    post({cmd:'deselect'});
-    selectedEids = {}; anchorEid = -1;
-    updateSelDom(); refreshEditorForSelection(false);   // false: we already told native directly, don't push again
+  document.querySelector('.app').addEventListener('click', function(e){
+    if (selCount() && isEntityWhitespaceTarget(e.target))
+      clearEntitySelectionFromWhitespace();
   });
   document.getElementById('saveBtn').addEventListener('click', doSave);
   document.getElementById('copyIdBtn').addEventListener('click', function(){
@@ -3999,7 +4126,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     btn.title = on ? 'Exit focus mode (Esc)' : 'Focus mode (Esc to exit)';
     btn.setAttribute('aria-label', on ? 'Exit focus mode' : 'Enter focus mode');
     setIcon(btn, on ? 'minimize-2' : 'maximize-2');
-    // Save/Revert/dirty-note live in .panel-head, which focus-mode's fixed overlay covers -- move the SAME
+    // Save/Revert/dirty-note live in .panel-head, which the expanded overlay covers -- move the SAME
     // node (not a clone) into .focus-head for the duration so they stay usable, then move it back on exit.
     // updateDirty()/doSave()/doRevert() already target these elements by id, so nothing else needs to change.
     var dest = document.getElementById(on ? 'focusHead' : 'entityStateHead');
@@ -4010,6 +4137,8 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     var revertBtn = document.getElementById('revertBtn'), saveBtn = document.getElementById('saveBtn');
     revertBtn.classList.toggle('icon', on);
     saveBtn.classList.toggle('icon', on);
+    revertBtn.classList.toggle('icon-button', on);
+    saveBtn.classList.toggle('icon-button', on);
     if (on) {
       revertBtn.innerHTML = iconSvg('undo-2');
       saveBtn.innerHTML = iconSvg('save');
@@ -4073,15 +4202,65 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     else if (e.target.closest('#descToggle')) this.classList.add('open');
   });
 
-  // Camera Origin: fields track the live camera (when unfocused); Lock pins it; a committed edit writes back.
-  function fmtNum(v) { return String(parseFloat((+v).toFixed(6))); }
-  function camVal(id) { return parseFloat(document.getElementById(id).value) || 0; }
-  function setCamField(id, v) { var el = document.getElementById(id); if (document.activeElement !== el) el.value = fmtNum(v); }
-  document.getElementById('camLockChk').addEventListener('change', function(){
-    if (this.checked) post({cmd:'camLock', on:1, x:camVal('camX'), y:camVal('camY'), z:camVal('camZ')});
-    else post({cmd:'camLock', on:0});
-  });
-  ['camX','camY','camZ'].forEach(function(id){ document.getElementById(id).addEventListener('change', function(){ post({cmd:'camSet', x:camVal('camX'), y:camVal('camY'), z:camVal('camZ')}); }); });
+  // Camera Origin is display-only in the current UI. The native host deliberately retains its camSet
+  // and camLock message handlers, write-once path, and per-frame lock path as dormant extension points;
+  // restoring editable controls later will not require reverse-engineering or rebuilding that backend.
+  function fmtNum(v) { var n = Number(v); return isFinite(n) ? String(parseFloat(n.toFixed(6))) : '--'; }
+  function setCamReadout(id, v) { document.getElementById(id).textContent = fmtNum(v); }
+
+  // Desktop menu behavior mirrors snapmap-midi: click or keyboard-open, outside-click close.
+  var OPEN_MENU = null;
+  function closeMenus() {
+    var labels = document.querySelectorAll('.menu-label');
+    for (var i = 0; i < labels.length; i++) {
+      labels[i].classList.remove('open');
+      labels[i].setAttribute('aria-expanded', 'false');
+    }
+    var popups = document.querySelectorAll('.menu-popup');
+    for (i = 0; i < popups.length; i++) popups[i].hidden = true;
+    OPEN_MENU = null;
+  }
+  function openMenu(name, focusFirst) {
+    closeMenus();
+    var label = document.querySelector('.menu-label[data-menu="' + name + '"]');
+    var popup = document.getElementById('menu-' + name);
+    if (!label || !popup) return;
+    label.classList.add('open');
+    label.setAttribute('aria-expanded', 'true');
+    popup.hidden = false;
+    OPEN_MENU = name;
+    if (focusFirst) {
+      var first = popup.querySelector('button:not(:disabled)');
+      if (first) first.focus();
+    }
+  }
+  function initMenus() {
+    var labels = document.querySelectorAll('.menu-label');
+    for (var i = 0; i < labels.length; i++) {
+      labels[i].addEventListener('click', function(e) {
+        e.stopPropagation();
+        var name = this.getAttribute('data-menu');
+        if (OPEN_MENU === name) closeMenus();
+        else openMenu(name, false);
+      });
+      labels[i].addEventListener('mouseenter', function() {
+        if (OPEN_MENU) openMenu(this.getAttribute('data-menu'), false);
+      });
+      labels[i].addEventListener('keydown', function(e) {
+        if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openMenu(this.getAttribute('data-menu'), true);
+        }
+      });
+    }
+    document.addEventListener('pointerdown', function(e) {
+      if (OPEN_MENU && !e.target.closest('.menu')) closeMenus();
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape' && OPEN_MENU) closeMenus();
+    });
+  }
+  initMenus();
 
   // Browser storage is a standalone-preview convenience only. In-game, the backend-owned config
   // service is authoritative and the host has already seeded the root class before navigation.
@@ -4096,15 +4275,15 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   }
   function applyTheme(dark, persist) {
     document.documentElement.classList.toggle('dark', dark);
-    document.getElementById('segLight').classList.toggle('on', !dark);
-    document.getElementById('segDark').classList.toggle('on', dark);
+    document.getElementById('menuLight').setAttribute('aria-checked', dark ? 'false' : 'true');
+    document.getElementById('menuDark').setAttribute('aria-checked', dark ? 'true' : 'false');
     if (!persist) return;
     var value = dark ? 'dark' : 'light';
     if (PREVIEW) previewThemeWrite(value);
     else configSet('theme', value);
   }
-  document.getElementById('segLight').addEventListener('click', function(){ applyTheme(false, true); });
-  document.getElementById('segDark').addEventListener('click', function(){ applyTheme(true, true); });
+  document.getElementById('menuLight').addEventListener('click', function(){ applyTheme(false, true); closeMenus(); });
+  document.getElementById('menuDark').addEventListener('click', function(){ applyTheme(true, true); closeMenus(); });
   (function(){
     var dark = document.documentElement.classList.contains('dark');
     if (PREVIEW) dark = previewThemeRead() === 'dark';
@@ -4128,13 +4307,160 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   });
   post({cmd:'winState'});
   var menubarEl = document.querySelector('.menubar');
-  function barInteractive(t){ return t.closest('.theme-toggle, .win-controls, button, input'); }
+  function barInteractive(t){ return t.closest('.app-menus, .win-controls, button, input'); }
   menubarEl.addEventListener('mousedown', function(e){ if (e.button === 0 && !barInteractive(e.target)) post({cmd:'winDrag'}); });
   menubarEl.addEventListener('dblclick', function(e){ if (!barInteractive(e.target)) post({cmd:'winMax'}); });
   [['rz-t','t'],['rz-b','b'],['rz-l','l'],['rz-r','r'],['rz-tl','tl'],['rz-tr','tr'],['rz-bl','bl'],['rz-br','br']].forEach(function(p){
     var el = document.querySelector('.'+p[0]);
     if (el) el.addEventListener('mousedown', function(e){ if (e.button === 0) { e.preventDefault(); post({cmd:'winResize', dir:p[1]}); } });
   });
+
+  // Shared section splitter. Every tab supplies only its CSS variable, side, labels, and preferred
+  // desktop minima; pointer/keyboard behavior, compact-width relaxation, reset, ARIA, and resize
+  // clamping all live here. The asset browser uses the same controller twice for its three sections.
+  var SPLIT_DRAG = null;
+  var splitResizeQueued = false;
+  function splitClamp(value, low, high) { return Math.max(low, Math.min(high, value)); }
+  function splitParts(splitter) {
+    if (!splitter) return null;
+    var before = splitter.previousElementSibling;
+    var after = splitter.nextElementSibling;
+    return before && after ? {before:before, after:after} : null;
+  }
+  function splitAttrNumber(splitter, name, fallback) {
+    var value = Number(splitter.getAttribute(name));
+    return isFinite(value) && value >= 0 ? value : fallback;
+  }
+  function splitBounds(splitter) {
+    var parts = splitParts(splitter);
+    if (!parts || splitter.offsetWidth === 0) return null;
+    var workspace = splitter.closest('[data-split-workspace]');
+    if (!workspace) return null;
+    /* Derive the pair's space from the workspace, not its current rendered widths. A user can leave a
+       wide inline preference and then shrink the window; flex overflow would otherwise make the stale
+       pair still LOOK wide to this calculation and prevent the resize clamp from ever correcting it. */
+    var available = workspace.clientWidth;
+    for (var i = 0; i < workspace.children.length; i++) {
+      var child = workspace.children[i];
+      if (child !== parts.before && child !== parts.after)
+        available -= child.getBoundingClientRect().width;
+    }
+    if (available < 1) return null;
+    var beforeMin = splitAttrNumber(splitter, 'data-min-before', 160);
+    var afterMin = splitAttrNumber(splitter, 'data-min-after', 220);
+    /* Plus deliberately permits windows much smaller than the desktop minima. When both cannot fit,
+       retain their relative preference but reserve 18% of the pair as an actual drag range. */
+    if (beforeMin + afterMin > available) {
+      var scale = (available * 0.82) / (beforeMin + afterMin);
+      beforeMin *= scale;
+      afterMin *= scale;
+    }
+    var side = splitter.getAttribute('data-split-side') === 'after' ? 'after' : 'before';
+    return {
+      min: side === 'after' ? afterMin : beforeMin,
+      max: side === 'after' ? available - beforeMin : available - afterMin
+    };
+  }
+  function splitTargetWidth(splitter) {
+    var parts = splitParts(splitter);
+    if (!parts) return 0;
+    return (splitter.getAttribute('data-split-side') === 'after' ? parts.after : parts.before)
+      .getBoundingClientRect().width;
+  }
+  function splitUpdateAria(splitter) {
+    var bounds = splitBounds(splitter);
+    if (!bounds) return;
+    var width = Math.round(splitTargetWidth(splitter));
+    splitter.setAttribute('aria-valuemin', String(Math.round(bounds.min)));
+    splitter.setAttribute('aria-valuemax', String(Math.round(bounds.max)));
+    splitter.setAttribute('aria-valuenow', String(width));
+    splitter.setAttribute('aria-valuetext', width + ' pixels for ' +
+      (splitter.getAttribute('data-split-label') || 'the section'));
+  }
+  function splitApplyWidth(splitter, value) {
+    var workspace = splitter.closest('[data-split-workspace]');
+    var variable = splitter.getAttribute('data-split-variable');
+    var bounds = splitBounds(splitter);
+    if (!workspace || !variable || !bounds) return;
+    workspace.style.setProperty(variable, Math.round(splitClamp(Number(value), bounds.min, bounds.max)) + 'px');
+    splitUpdateAria(splitter);
+  }
+  function splitConstrain(splitter) {
+    var bounds = splitBounds(splitter);
+    if (!bounds) return;
+    var width = splitTargetWidth(splitter);
+    if (width < bounds.min || width > bounds.max) splitApplyWidth(splitter, width);
+    else splitUpdateAria(splitter);
+  }
+  function constrainSplitWorkspaces() {
+    document.querySelectorAll('.pane-splitter').forEach(splitConstrain);
+  }
+  function queueSplitConstrain() {
+    if (splitResizeQueued) return;
+    splitResizeQueued = true;
+    requestAnimationFrame(function(){ splitResizeQueued = false; constrainSplitWorkspaces(); });
+  }
+  function splitMove(e) {
+    if (!SPLIT_DRAG || SPLIT_DRAG.pointer !== e.pointerId) return;
+    var splitter = SPLIT_DRAG.splitter;
+    var parts = splitParts(splitter);
+    if (!parts) return;
+    var splitLeft = e.clientX - SPLIT_DRAG.offset;
+    var width = splitter.getAttribute('data-split-side') === 'after'
+      ? parts.after.getBoundingClientRect().right - (splitLeft + splitter.offsetWidth)
+      : splitLeft - parts.before.getBoundingClientRect().left;
+    splitApplyWidth(splitter, width);
+  }
+  function splitEnd(e) {
+    if (!SPLIT_DRAG || SPLIT_DRAG.pointer !== e.pointerId) return;
+    var splitter = SPLIT_DRAG.splitter;
+    SPLIT_DRAG = null;
+    splitter.classList.remove('dragging');
+    document.body.classList.remove('pane-resizing');
+    try { splitter.releasePointerCapture(e.pointerId); } catch (ignore) { /* already released */ }
+    splitUpdateAria(splitter);
+  }
+  function splitReset(splitter) {
+    var workspace = splitter.closest('[data-split-workspace]');
+    var variable = splitter.getAttribute('data-split-variable');
+    if (!workspace || !variable) return;
+    workspace.style.removeProperty(variable);
+    requestAnimationFrame(function(){ splitConstrain(splitter); });
+  }
+  function initSplitWorkspaces() {
+    document.querySelectorAll('.pane-splitter').forEach(function(splitter){
+      if (splitter.getAttribute('data-split-ready') === '1') return;
+      splitter.setAttribute('data-split-ready', '1');
+      splitter.addEventListener('pointerdown', function(e){
+        if (e.button !== 0 || splitter.offsetWidth === 0) return;
+        e.preventDefault();
+        SPLIT_DRAG = {pointer:e.pointerId, splitter:splitter,
+          offset:e.clientX - splitter.getBoundingClientRect().left};
+        splitter.classList.add('dragging');
+        document.body.classList.add('pane-resizing');
+        splitter.setPointerCapture(e.pointerId);
+      });
+      splitter.addEventListener('pointermove', splitMove);
+      splitter.addEventListener('pointerup', splitEnd);
+      splitter.addEventListener('pointercancel', splitEnd);
+      splitter.addEventListener('dblclick', function(e){ e.preventDefault(); splitReset(splitter); });
+      splitter.addEventListener('keydown', function(e){
+        var bounds = splitBounds(splitter);
+        if (!bounds) return;
+        var sideAfter = splitter.getAttribute('data-split-side') === 'after';
+        var width = splitTargetWidth(splitter);
+        if (e.key === 'ArrowLeft') width += sideAfter ? 16 : -16;
+        else if (e.key === 'ArrowRight') width += sideAfter ? -16 : 16;
+        else if (e.key === 'Home') width = sideAfter ? bounds.max : bounds.min;
+        else if (e.key === 'End') width = sideAfter ? bounds.min : bounds.max;
+        else return;
+        e.preventDefault();
+        splitApplyWidth(splitter, width);
+      });
+    });
+    constrainSplitWorkspaces();
+    window.addEventListener('resize', queueSplitConstrain);
+  }
 
   // top-level tab switching (Entities / Prefabs / Timelines)
   document.querySelectorAll('.tabstrip .tab').forEach(function(tab){
@@ -4146,6 +4472,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       ['entities','prefabs','timelines','assets'].forEach(function(name){
         document.getElementById('panel-' + name).style.display = (name === which) ? 'flex' : 'none';
       });
+      queueSplitConstrain();
       if (which === 'prefabs') post({cmd:'listPrefabs'});
       if (which === 'timelines') tlMaybeAutoRefresh();   // catch stale content from a play-mode round-trip that happened while this tab wasn't visible
       // The selected catalog is cached after its first fetch, so later visits do not cross the bridge.
@@ -5226,6 +5553,12 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     host.innerHTML =
         '<div class="panel ab-rail"><div class="panel-head"><span class="panel-title">Asset type</span></div>'
       +   '<div class="panel-body"><div class="list" data-ab="rail"></div></div></div>'
+      + '<div class="pane-splitter ab-rail-splitter" role="separator" tabindex="0"'
+      +   ' aria-label="Resize Asset Type and Catalog" aria-orientation="vertical"'
+      +   ' aria-valuemin="100" aria-valuemax="400" aria-valuenow="138"'
+      +   ' data-split-variable="--split-rail" data-split-side="before"'
+      +   ' data-min-before="100" data-min-after="180" data-split-label="Asset Type"'
+      +   ' title="Drag to resize Asset Type and Catalog; double-click to reset"></div>'
       + '<div class="panel ab-mid"><div class="panel-head"><span class="panel-title">Catalog</span>'
       +     '<span class="badge" data-ab="cnt">0</span>'
       /* No Refresh control. The catalog is indexed ONCE per process (imgpreview_load's g_loaded
@@ -5247,6 +5580,12 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
       +       '<input type="checkbox" data-ab="xplat"> Cross Platform Textures Only</label>'
       +     '<div class="ab-crumbs" data-ab="crumbs"></div></div>'
       +   '<div class="panel-body"><div class="list" data-ab="tree"></div></div></div>'
+      + '<div class="pane-splitter" role="separator" tabindex="0"'
+      +   ' aria-label="Resize Catalog and Asset Inspector" aria-orientation="vertical"'
+      +   ' aria-valuemin="180" aria-valuemax="520" aria-valuenow="268"'
+      +   ' data-split-variable="--split-inspector" data-split-side="after"'
+      +   ' data-min-before="180" data-min-after="180" data-split-label="Asset Inspector"'
+      +   ' title="Drag to resize Catalog and Asset Inspector; double-click to reset"></div>'
       + '<div class="panel ab-insp"><div class="panel-head"><span class="panel-title">Asset</span>'
       +     '<span class="hint" data-ab="pvstatus" style="margin-left:auto;font-style:normal"></span></div>'
       +   '<div class="panel-body" data-ab="insp"></div></div>';
@@ -5815,7 +6154,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
      * shortlist wants. Fill the shared Lucide star only for pinned rows; opacity and accent color
      * provide the same quick state scan without relying on font glyph availability. */
     var pinBtn = isDir ? '<span class="ab-pin-gap"></span>'
-      : '<button class="ab-pin' + (pinned ? ' on' : '') + '" data-pin="' + abEsc(path) + '"'
+      : '<button type="button" class="ab-pin icon-button' + (pinned ? ' on' : '') + '" data-pin="' + abEsc(path) + '"'
       + ' data-pintype="' + abEsc(ptype) + '"'
       + ' title="' + (pinned ? 'Unpin this asset' : 'Pin this asset to the Pinned list') + '"'
       + ' aria-label="' + (pinned ? 'Unpin this asset' : 'Pin this asset') + '">' + iconSvg('star') + '</button>';
@@ -5824,7 +6163,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
          + pinBtn
          + '<span class="nm' + (isDir ? '' : ' leaf') + '">' + abEsc(label) + '</span>'
          + (isDir ? '<span class="cnt">' + count.toLocaleString() + '</span>'
-                  : '<button class="cp" data-copy="' + abEsc(path) + '" title="Copy the full path" aria-label="Copy the full path">' + iconSvg('copy') + '</button>')
+                  : '<button type="button" class="cp icon-button" data-copy="' + abEsc(path) + '" title="Copy the full path" aria-label="Copy the full path">' + iconSvg('copy') + '</button>')
          + '</div></div>';
   }
 
@@ -5850,7 +6189,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     if (audible) {
       var on = (abSoundPlaying === path);
       h = '<div class="ab-audition' + (on ? ' playing' : '') + '">'
-        + '<button class="btn ab-play" data-ab-audition="1" title="'
+        + '<button type="button" class="btn ab-play icon-button" data-ab-audition="1" title="'
         +   (on ? 'Stop the preview' : 'Play this sound through the 3D editor') + '">'
         +   iconSvg(on ? 'square' : 'play') + '</button>'
         + '<div class="ab-audition-note">' + (on ? 'Playing' : 'Preview this sound') + '</div>'
@@ -6453,6 +6792,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   /* --- mounts ---------------------------------------------------------------------------------- */
   var abTabMount = abMount(document.getElementById('abTabHost'), 'tab');
   var abModalMount = abMount(document.getElementById('abModalHost'), 'modal');
+  initSplitWorkspaces();
 
   /* Re-render every mounted browser's inspector. Called whenever the thing Apply is gated on
    * changes: the selection, or the entity state landing from the backend. */
@@ -6481,6 +6821,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     document.getElementById('amPath').textContent = abModalMount.sel || 'Nothing selected.';
     amOverlay.style.display = 'flex';
     abActive = abModalMount;
+    queueSplitConstrain();
     abOpenCatalog(abModalMount);
     abSyncSoundSession();   /* the modal is the browser too -- same mode, same one decision */
     var q = abModalMount.el('q'); if (q) q.focus();
@@ -6947,7 +7288,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   if (newFolderBtn) newFolderBtn.addEventListener('click', function(){
     if (!prefabTree) return;
     var f = document.createElement('div'); f.className = 'pf-folder pf-open';
-    f.innerHTML = '<div class="pf-folder-head"><span class="pf-caret">' + iconSvg('chevron-down') + '</span> <input class="pf-folder-name" value="New Folder"><span class="pf-folder-del" title="Delete folder">' + iconSvg('x') + '</span></div><div class="pf-folder-body"></div>';
+    f.innerHTML = '<div class="pf-folder-head"><span class="pf-caret">' + iconSvg('chevron-down') + '</span> <input class="pf-folder-name" value="New Folder"><button type="button" class="pf-folder-del icon-button" title="Delete folder" aria-label="Delete folder">' + iconSvg('x') + '</button></div><div class="pf-folder-body"></div>';
     prefabTree.appendChild(f);
     var inp = f.querySelector('.pf-folder-name');
     var done = false;

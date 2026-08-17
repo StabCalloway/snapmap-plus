@@ -26,7 +26,6 @@ DLL ships.
 |---|---|
 | `src/ui/webview/snapmap_plus_ui_webview.cpp` | The WebView2 host: the `sh_ui_init` entry, a Win32 window, the WebView2 bring-up, the 30 Hz think-loop, and the JS <-> native bridge. |
 | `src/ui/webview/mockup.html` | The UI (HTML/CSS/JS), embedded into the DLL at build time. Self-populates with sample data when opened in a plain browser (a "preview mode", inert in DOOM). |
-| `src/ui/webview/preview.html` | Standalone phone/Tailscale preview shell. It scales the fixed 1440x900 mockup as one desktop canvas, fits it to the available width, and centers it between black bars. It is not embedded or shipped. |
 | `src/ui/webview/LUCIDE_LICENSE.md` | License notice for the small Lucide SVG subset embedded in `mockup.html`. |
 | `src/ui/webview/theme_bootstrap.{h,cpp}` | The small pure helper that validates the registered theme JSON and seeds the embedded document's root class before WebView2 navigation. |
 | `src/ui/build.ps1` | Builds `build/webview/snapmap-plus-ui.dll`: fetches the WebView2 SDK from NuGet into `build/` (gitignored), statically links the loader, embeds the HTML. Reuses `sl_exports.cpp` + `snapmap-plus-ui.def`. Invoked by the repo-root `build.ps1` (backend + frontend in lockstep). |
@@ -60,10 +59,10 @@ The frontend holds no engine addresses; it calls the backend only through the vt
 | Synchronize with editor (editor -> list) | `get_selection` +0x150 |
 | Select in editor (list -> editor) | `clear_selection` +0x148, `add_to_selection` +0x138 |
 | Class / Inherit autocomplete | `enum_valid_classes` +0x270, `enum_inherits` +0x278 |
-| Camera Origin (X/Y/Z + Lock Position) | `get_editor_vec3` +0x08, `set_editor_vec3` +0x00 |
+| Camera origin footer (read-only X/Y/Z) | `get_editor_vec3` +0x08; the dormant `camSet` / `camLock` bridge and `set_editor_vec3` +0x00 path remain implemented for a future control |
 | Installed version readout | reads `%LOCALAPPDATA%\snapmap-plus\install.json` (written by the installer) |
 | Persistent settings (Light / Dark and Entities controls) | `config_get_json` +0x2B0, `config_set_json` +0x2B8 — registered UTF-8 JSON fragments owned by the backend |
-| Deselect (explicit button, "Select in 3D editor" mode) | `clear_selection` +0x148 |
+| Deselect (click a blank structural surface outside Entity State) | `clear_selection` +0x148; the complete Entity State pane, including expanded Decl Text, is protected inspection space |
 | List-driven selections behave natively (empty-space click deselects; Delete / Move / bottom-bar controls all apply) | `add_to_selection` +0x138, `clear_selection` +0x148 and `remove_from_selection` +0x130 additionally sync the editor's EntityMode selection-state field (`editor+0x22330`, state `+0x1ac`, dirty `+0xBB8`) -- the field the engine's own empty-space-click handler consults. Direct SEH-guarded field writes, gated on the editor already being in EntityMode. Re-derive recipe at the constant block in `src/backend/iface_engine.c`. |
 | Entities list clears its highlight on a native deselect ("Select in 3D" mode) | the existing `selCount` broadcast (`get_selection` +0x150, ~330 ms poll); the UI now acts on its >0 -> 0 transition |
 | Live "Create from selection (N)" button count | `get_selection` +0x150, polled every ~330 ms independent of the sync checkboxes |
@@ -74,7 +73,7 @@ The frontend holds no engine addresses; it calls the backend only through the vt
 | Open a timeline (tabs + events) | `serialize_entity` +0xc8 -- the same slot Save-to-Decl and Push-to-stack already use, JSON-parsed client-side |
 | Timeline event-arg dropdowns (decl / enum / per-entity asset lists) | `enum_decls_of_resclass` +0x110 -- the same shared slot for both decl-name and enum-member enumeration |
 | Save Timeline (commit `componentTimeLine` / `encounterComponent`) | `apply_edit` kind=0 -- the same path Save-to-Decl already uses, id-targeted instead of paste-targeted |
-| Send feedback (the bottom-right "?" dialog) | no engine slot -- the page posts `reportSubmit` with an opaque JSON payload; the host POSTs it to the feedback relay on a short-lived worker thread (WinHTTP, the frontend's only network touch -- see the capability note in `snapmap_plus_ui_webview.cpp`) and answers `reportResult {ok, mode, number}` -> green/red toast. Pipeline: [`feedback.md`](feedback.md) |
+| Send feedback (the bottom-right help-icon dialog) | no engine slot -- the page posts `reportSubmit` with an opaque JSON payload; the host POSTs it to the feedback relay on a short-lived worker thread (WinHTTP, the frontend's only network touch -- see the capability note in `snapmap_plus_ui_webview.cpp`) and answers `reportResult {ok, mode, number}` -> green/red toast. Pipeline: [`feedback.md`](feedback.md) |
 | Crash-report dialog (auto-opens on a recorded crash) | no engine slot -- the host polls `<game>\snapmap-plus\crash\` (~2 s) for a crash record the backend wrote at fault time and posts `crashPending {record, count}`; the page auto-opens the dialog. Send composes the payload host-side (`crashSubmit` -> `category:"crash"`, optional anonymized log tails) and rides the SAME WinHTTP thread + `reportResult` as feedback; `crashDismiss` clears the pending record. Pipeline: [`feedback.md`](feedback.md) |
 
 ### Configuration bridge and settings startup
@@ -94,8 +93,8 @@ The page also sends one startup `configGet` each for `entities.show_hidden` and
 `entities.selection_mode`. It aggregates both responses before changing either Entity control, so startup
 side effects run only after the pair is known. The single selection-mode value makes Follow Selection and
 Select in 3D mutually exclusive; restoring `select_in_3d` updates the control without pushing an empty
-list selection into the editor. Clicking Light, Dark, Show Hidden, or either Entity direction applies the
-choice immediately, then asks the backend to persist it. A rejected or session-only result keeps the
+list selection into the editor. Choosing Light Theme or Dark Theme from View, clicking Show Hidden, or
+changing either Entity direction applies the choice immediately, then asks the backend to persist it. A rejected or session-only result keeps the
 session behavior but warns that it could not be saved. Startup status similarly warns when a corrupt file
 was backed up, a newer schema was left untouched, or the service had to fall back to volatile settings.
 `localStorage` is used **only** when `mockup.html` is opened directly in a normal browser (`PREVIEW`); it
@@ -115,6 +114,85 @@ through it).
 
 Newest first. Each dated entry covers one working session's worth of change; the undated **Baseline**
 entry at the bottom is the original POC buildout, before this doc tracked dates per entry.
+
+### 2026-08-17 -- Shared adjustable section splitters
+
+- **Adjacent sections are now one workspace instead of two bordered cards.** Entities/Entity State,
+  Prefabs/Prefab Details, and Timelines/Timeline Editor share a single outer surface with one vertical
+  divider. Every section header occupies the same fixed 40px track, so an icon action such as Refresh
+  cannot make one header sit lower than its neighbor.
+- **The divider is adjustable and accessible.** A transparent 13px hit target leaves six clickable
+  pixels on either side of the one-pixel rule; hover, keyboard focus, and dragging expand that rule to a
+  three-pixel accent without adding layout width.
+  Dragging changes the section widths, arrow keys move it in 16px steps, Home/End reach the allowed
+  bounds, and double-click restores the CSS default. Because only the visible pixel participates in
+  layout, header fills and horizontal section rules meet the divider instead of being cut off by a gutter.
+- **One controller serves every tab.** A shared split-workspace implementation owns pointer capture,
+  keyboard behavior, compact-window minimum relaxation, resize clamping, reset, and ARIA values. The
+  Assets tab and its modal use the same controller for both Asset Type/Catalog and Catalog/Inspector
+  dividers rather than carrying separate resize code.
+
+### 2026-08-17 -- Viewport-bounded shell at compact window sizes
+
+- **The document no longer scrolls underneath the app chrome.** The HTML root and app shell are clamped
+  to the WebView2 client rectangle, the content region may shrink to zero height, and scrolling remains
+  inside the individual panes. A document-level horizontal scrollbar can no longer consume the bottom
+  of a short viewport or push the footer below it. Expanded Decl Text is now positioned inside that
+  content region rather than across the whole viewport, so focus mode cannot cover the header or footer.
+- **The footer reflows instead of defining the window width.** At compact widths, connection/selection
+  and Updated/help stay on the first row while the read-only X/Y/Z group becomes a full-width second
+  row with three shrinkable columns. Tabs, the two primary panes, and the asset browser also relinquish
+  their desktop minimum widths rather than extending the page past the right edge.
+- **Native sizing remains the single source of truth.** The HTML edge grips only request Windows' native
+  move/size loop; each resulting `WM_SIZE` gives WebView2 the new client bounds, and CSS lays out inside
+  those bounds. This is the same arrangement as snapmap-midi, but MIDI enforces a 960x640 native minimum
+  while Plus deliberately supports smaller windows and therefore needs the responsive rules above.
+
+### 2026-08-17 -- Camera readout moved into grouped footer
+
+- **The Camera Lock checkbox and editable X/Y/Z fields are removed from the tab strip.** The live camera
+  origin is now a compact read-only footer group labelled `X:`, `Y:`, and `Z:`, with tabular monospace
+  values so changing coordinates do not make the group jitter.
+- **The footer has three explicit groups:** the connection dot/version plus Selected on the left, camera
+  coordinates with a spaced divider beside them, and Updated plus the help button aligned at the right
+  edge. The redundant visible `(Connected)` text is gone; the green dot is the sole visual connection
+  indicator and retains an accessible label/tooltip.
+- **Only the UI was retired.** The native `camSet` and `camLock` messages, one-shot camera write,
+  per-frame lock, and `set_editor_vec3` call remain intact and clearly marked as dormant extension points.
+  A newly navigated page is forced to receive one camera publication even when the origin has not moved.
+
+### 2026-08-17 -- Flat controls, Lucide actions, and whitespace deselection
+
+- **The conditional Deselect button is gone.** Clicking a blank structural surface outside Entity State
+  now clears both the page selection and the 3D-editor selection. Buttons, fields, selectable rows, and
+  menus keep their own click behavior. The entire Entity State pane is protected inspection space:
+  clicking its controls, editor, or blank padding never clears the entity, including while Decl Text is
+  expanded.
+- **Icon-only actions now share the Lucide SVG sprite and one centering contract.** This covers window
+  controls, Refresh, Copy ID, combo arrows, focus/restore, feedback, modal close, Timeline add/remove,
+  event and prefab-folder removal, and the asset browser's pin/copy/play actions. Dynamically rendered
+  actions that were clickable spans or divs are real buttons with accessible labels; the old text `?`
+  feedback glyph is now Lucide Circle Help.
+- **Buttons stay put when pressed.** Active clicks highlight the border without translating the control.
+  Primary actions brighten on hover, following snapmap-midi. Expanded Decl Text uses the same rules:
+  its temporarily iconized Revert and Save to Decl nodes receive the shared centering class, and the
+  primary Save action keeps the brighter hover state.
+
+### 2026-08-17 -- Desktop View menu
+
+- **Theme selection now lives in a left-aligned View menu beside the Snapmap+ brand.** The menu follows
+  snapmap-midi's desktop chrome and replaces the top-right segmented Light / Dark switch. Its radio items
+  show the current theme, support mouse and keyboard opening, close after a choice or outside click, and do
+  not start a native window drag.
+- **Theme persistence is unchanged.** Choosing Light Theme or Dark Theme applies immediately and sends the
+  registered `theme` setting through `configSet` to the backend-owned `config.json`; standalone browser
+  preview mode continues to use `localStorage` only.
+
+### 2026-08-17 -- One browser preview entry point
+
+- **The separate letterboxed phone shell has been removed.** Open `mockup.html` directly for browser UI
+  review. It remains fully interactive with fake data when no WebView2 host is present. Production behavior
+  is unchanged because the removed shell was never embedded into the DLL or shipped.
 
 ### 2026-08-16 -- Bounded Entities rendering and lifecycle performance evidence
 
@@ -144,16 +222,16 @@ entry at the bottom is the original POC buildout, before this doc tracked dates 
   startup hitch, while the event-driven diagnostics establish whether Snapmap+ was busy or idle during
   the next severe occurrence before any broader engine-side change is considered.
 
-### 2026-08-15 -- Letterboxed phone preview
+### 2026-08-15 -- Letterboxed phone preview (removed 2026-08-17)
 
-- **The remote preview now presents the native desktop canvas instead of reflowing it for a phone.**
-  `preview.html` holds `mockup.html` at the app's fixed 1440x900 design size and scales the complete frame
-  to the available viewport width. The result remains centered in a black viewport, with equal black
+- **The short-lived remote preview presented the native desktop canvas instead of reflowing it for a phone.**
+  `preview.html` held `mockup.html` at the app's fixed 1440x900 design size and scaled the complete frame
+  to the available viewport width. The result remained centered in a black viewport, with equal black
   space above and below rather than stretching to the phone's full height.
-- **The shell is preview-only.** It is never embedded into the WebView2 DLL and does not alter the native
+- **The shell was preview-only.** It was never embedded into the WebView2 DLL and did not alter the native
   window, the mockup's layout, or production behavior.
-- **Pinch zoom remains under browser control.** The shell measures the stable layout viewport and ignores
-  visual-viewport resize events while the user is zoomed, so a two-finger expansion enlarges the canvas
+- **Pinch zoom remained under browser control.** The shell measured the stable layout viewport and ignored
+  visual-viewport resize events while the user was zoomed, so a two-finger expansion enlarged the canvas
   instead of triggering an equal and opposite fit-to-width rescale.
 
 ### 2026-08-15 -- Shared Lucide chrome and compact actions
@@ -330,8 +408,9 @@ entry at the bottom is the original POC buildout, before this doc tracked dates 
   the UI simply wasn't acting on it reaching zero. Gated to that mode only ("Follow selection" already
   mirrors the whole editor selection, and with both off the list selection is local), to a real
   greater-than-zero-to-zero transition, and to the case where the list actually has a highlight.
-- The **Deselect** button is kept -- it saves a trip back to the 3D view and stays useful if the mode
-  state is ever out of sync -- but its tooltip no longer describes the (now fixed) stuck behavior.
+- The **Deselect** button was kept as a convenience in this 2026-07-27 change. It was removed on
+  2026-08-17 when blank-space deselection replaced it outside the protected Entity State pane, while
+  retaining the same native `clear_selection` path.
 - **The mode-state write is guarded to idle/selected only.** That field is not a two-value flag: the
   engine drives it to other values while a manipulation is in flight (grabbing an entity, holding a
   staged prefab) and for sub-screens and the logic sub-mode, and it has its own "is the mode busy"
@@ -862,21 +941,21 @@ that doc for the write-up.
 - Sliding toasts for Copy / Save / Delete / Push, color-coded (success / warning / error).
 - "Follow editor selection" (editor selection -> list, any N) and "Select in 3D editor" (list selection ->
   editor, hidden entities skipped). The two are mutually exclusive to avoid a selection feedback loop.
-- Camera Origin bar (always visible): X/Y/Z fields track the live editor camera; "Lock Position" pins it
-  (writes the stored vec3 every frame); a committed field edit writes back.
-- Modern light/dark theme with a menu bar toggle (persisted by the backend-owned `config.json` service in
-  DOOM; `localStorage` is standalone-PREVIEW-only); a menu bar with a Settings placeholder for future
-  feature toggles. Native controls (scrollbars, checkboxes) follow the theme.
+- Camera Origin initially shipped as editable X/Y/Z fields plus "Lock Position" in the tab strip. On
+  2026-08-17 those controls were replaced by a read-only X/Y/Z footer group; the original write and lock
+  backend remains available as a dormant future extension point.
+- Modern light/dark theme selected from the left-aligned View menu (persisted by the backend-owned
+  `config.json` service in DOOM; `localStorage` is standalone-PREVIEW-only). Native controls (scrollbars,
+  checkboxes) follow the theme.
 - Installed-version + connection status in the status bar.
 - Browser preview mode: `mockup.html` self-populates with sample data and is fully interactive when
   opened without a WebView2 host (for fast UI iteration); inert in DOOM.
 - Default window size bumped to 1440x900 (from 1040x720) so the Entities and Prefabs tabs fit without a
   manual resize on first launch.
-- Explicit **Deselect** button next to "Select in 3D editor" (only visible while that mode is on): calls
-  `clear_selection` directly. Added here as a workaround, because at the time a native empty-space click
-  would not clear a list-driven selection. That root cause was reverse-engineered and fixed on
-  2026-07-27 (see the entry at the top of this changelog); the button remains, now purely as a
-  convenience and as the escape hatch if the editor mode state is ever out of sync.
+- Historical explicit **Deselect** button next to "Select in 3D editor": it called `clear_selection`
+  directly and was added because a native empty-space click could not clear a list-driven selection.
+  That root cause was fixed on 2026-07-27; the visible button was then removed on 2026-08-17 in favor
+  of blank-space deselection outside the Entity State inspection pane through the same native path.
 - **Prefabs tab, wired to the real filesystem** (`%LOCALAPPDATA%\snapmap-plus\prefabs\`) -- no fake/mockup data:
   - Live list of real `.json` prefab files, refreshed from disk on every Prefabs-tab click; an empty-state
     message when there are none yet.
@@ -948,6 +1027,4 @@ Genuinely open items only -- fixed bugs and completed work live in the Changelog
 Open `src/ui/webview/mockup.html` directly in a browser to see and click through the UI with fake data --
 useful for iterating on layout/behavior without building or deploying. This preview branch only runs when
 there is no WebView2 host, so it has no effect inside DOOM. The preview remembers its theme in browser
-`localStorage`; production uses the backend-owned `config.json` service instead. For a phone-sized remote
-review, open `src/ui/webview/preview.html`: it keeps the mockup at its native 1440x900 viewport, scales the
-whole canvas to fit the device width, and letterboxes the remaining height in black.
+`localStorage`; production uses the backend-owned `config.json` service instead.
