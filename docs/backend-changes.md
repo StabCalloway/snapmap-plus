@@ -39,11 +39,13 @@ six-argument forward left that slot as stack garbage, which turned ordinary
 silent misses into fatal errors and aborted a fully loaded map back to the
 SnapMap browser.
 
-**Also.** `matrix_probe` is a temporary read-only diagnostic that detours the
-pinned model-matrix builder at RVA `0x1A81640`, reports the first few singular
-matrices with every origin, axis and scale term spelled out, and then goes
-quiet. It exists to characterise an editor-preview defect where a placed editor
-entity carries a zero scale, and is expected to be removed once that is fixed.
+**Also.** A placed editor entity from an override package rendered with a zero
+scale, so its model matrix was singular: the engine logged `modelMatrix invert
+failed` every frame, forced the axis back to identity, and the entity could not
+be transformed. The scale a Snap editor entity uses comes from its entityDef's
+`renderModelInfo.scale`, which a shipped entityDef inherits as a unit vector and
+a package-published one did not. Declaring it explicitly in the package's
+entityDef fixes the preview; no product code was involved.
 
 ## 2026-08-20 — Use DOOM's own palette contract to admit new editor entities
 

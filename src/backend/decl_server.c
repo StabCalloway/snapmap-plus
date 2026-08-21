@@ -38,7 +38,6 @@
 #include "overrides.h"
 #include "palette_refresh.h"
 #include "decl_visibility.h"
-#include "matrix_probe.h"
 #include "resource_bridge.h"
 #include "user_overrides.h"
 
@@ -1716,8 +1715,7 @@ static int ds_scan_and_materialize_missing(
     {
         /* Registration only reaches the source catalog, which the engine stops
          * consulting once a map starts loading. Keep the published identities
-         * answerable across that boundary, then arm the read-only diagnostic
-         * for the editor's model matrix. Neither is allowed to fail the
+         * answerable across that boundary. This is not allowed to fail the
          * registration that already succeeded. */
         char owned[SH_DECL_SERVER_TYPE_CAP + SH_DECL_SERVER_NAME_CAP + 32];
         char published[SH_DECL_SERVER_TYPE_CAP + SH_DECL_SERVER_NAME_CAP + 32];
@@ -1726,7 +1724,6 @@ static int ds_scan_and_materialize_missing(
             (void)sh_decl_visibility_install(g_module_base, owned, published);
         else
             backend_log("decl-visibility REFUSED: no owned/published candidate pair was available to validate the probe");
-        (void)sh_matrix_probe_install(g_module_base);
     }
     return 1;
 }

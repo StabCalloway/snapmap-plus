@@ -40,7 +40,6 @@ void backend_log(const char *message)
 /* The decl server arms these after a successful palette rebuild. Neither may
  * affect its outcome, so the seam records the calls and always succeeds. */
 static int g_visibility_installs;
-static int g_matrix_probe_installs;
 
 int sh_decl_visibility_install(const unsigned char *module_base,
                                const char *existing_probe_path,
@@ -48,13 +47,6 @@ int sh_decl_visibility_install(const unsigned char *module_base,
 {
     (void)module_base; (void)existing_probe_path; (void)absent_probe_path;
     g_visibility_installs++;
-    return 1;
-}
-
-int sh_matrix_probe_install(const unsigned char *module_base)
-{
-    (void)module_base;
-    g_matrix_probe_installs++;
     return 1;
 }
 
