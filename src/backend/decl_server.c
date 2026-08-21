@@ -198,6 +198,10 @@ typedef struct ds_discovered {
     char type[SH_DECL_SERVER_TYPE_CAP];
     char name[SH_DECL_SERVER_NAME_CAP];
     char source[SH_DECL_SERVER_SOURCE_CAP];
+    /* Which package published this. With several installed, a bare identity in
+     * a refusal message is not actionable -- the author needs to be told which
+     * two packages disagree. */
+    char package[SH_PACKAGE_NAME_CAP];
     size_t linked_index;
     int linked;
 } ds_discovered;
@@ -622,11 +626,50 @@ static char *ds_read_linked(size_t index, size_t *out_length, const char **reaso
     return body;
 }
 
-static int ds_discover_one(ds_discovery *discovery,
+static int ds_identity_equal(const ds_discovered *item,
+                             const char *type, const char *name);
+
+/* Compare two decl files byte for byte in bounded chunks. Two packages shipping
+ * the SAME identity with the SAME bytes is a duplicate, not a disagreement: it
+ * happens whenever a shared prerequisite is vendored into more than one package,
+ * and refusing it would punish the author for being self-contained. Returns 1
+ * when both files are readable and identical. */
+static int ds_files_identical(const char *left_path, const char *right_path)
+{
+    HANDLE left = INVALID_HANDLE_VALUE, right = INVALID_HANDLE_VALUE;
+    LARGE_INTEGER left_size, right_size;
+    unsigned char left_chunk[4096], right_chunk[4096];
+    int identical = 0;
+
+    left = CreateFileA(left_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                       FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    right = CreateFileA(right_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (left == INVALID_HANDLE_VALUE || right == INVALID_HANDLE_VALUE) goto done;
+    if (!GetFileSizeEx(left, &left_size) || !GetFileSizeEx(right, &right_size)) goto done;
+    if (left_size.QuadPart != right_size.QuadPart) goto done;
+    if (left_size.QuadPart > (LONGLONG)DS_MAX_FILE_BYTES) goto done;
+    for (;;) {
+        DWORD got_left = 0, got_right = 0;
+        if (!ReadFile(left, left_chunk, sizeof(left_chunk), &got_left, NULL) ||
+            !ReadFile(right, right_chunk, sizeof(right_chunk), &got_right, NULL)) goto done;
+        if (got_left != got_right) goto done;
+        if (!got_left) break;
+        if (memcmp(left_chunk, right_chunk, got_left) != 0) goto done;
+    }
+    identical = 1;
+done:
+    if (right != INVALID_HANDLE_VALUE) CloseHandle(right);
+    if (left != INVALID_HANDLE_VALUE) CloseHandle(left);
+    return identical;
+}
+
+static int ds_discover_one(ds_discovery *discovery, const char *package,
                            const char *absolute_path, const char *relative_path)
 {
     ds_discovered *item;
     const char *reason = NULL;
+    size_t existing;
     char type[SH_DECL_SERVER_TYPE_CAP];
     char name[SH_DECL_SERVER_NAME_CAP];
     char source[SH_DECL_SERVER_SOURCE_CAP];
@@ -636,6 +679,20 @@ static int ds_discover_one(ds_discovery *discovery,
                                                source, sizeof(source), &reason)) {
         ds_log("REFUSED", relative_path, reason);
         g_capture_refused++;
+        return 1;
+    }
+    /* Compose an identical twin from another package instead of admitting a
+     * second copy: the ambiguity rule downstream would otherwise refuse BOTH
+     * and the identity would vanish from a perfectly consistent install. */
+    for (existing = 0; existing < discovery->count; existing++) {
+        ds_discovered *other = &discovery->items[existing];
+        char line[512];
+        if (other->linked || !ds_identity_equal(other, type, name)) continue;
+        if (!ds_files_identical(other->absolute, absolute_path)) break;
+        _snprintf_s(line, sizeof(line), _TRUNCATE,
+                    "decl-server COMPOSED: %s is byte-identical in packages '%s' and "
+                    "'%s'; the first copy serves it", source, other->package, package);
+        backend_log(line);
         return 1;
     }
     if (discovery->count >= DS_MAX_DISCOVERED) {
@@ -654,6 +711,7 @@ static int ds_discover_one(ds_discovery *discovery,
     strcpy_s(item->type, sizeof(item->type), type);
     strcpy_s(item->name, sizeof(item->name), name);
     strcpy_s(item->source, sizeof(item->source), source);
+    strcpy_s(item->package, sizeof(item->package), package ? package : "");
     return 1;
 }
 
@@ -748,13 +806,14 @@ static int ds_discover_linked(ds_discovery *discovery)
         strcpy_s(item->type, sizeof(item->type), type);
         strcpy_s(item->name, sizeof(item->name), name);
         strcpy_s(item->source, sizeof(item->source), source);
+        strcpy_s(item->package, sizeof(item->package), "linked");
         item->linked_index = index;
         item->linked = 1;
     }
     return 1;
 }
 
-static int ds_walk(ds_discovery *discovery,
+static int ds_walk(ds_discovery *discovery, const char *package,
                    const char *directory, const char *relative, int depth)
 {
     char pattern[MAX_PATH];
@@ -795,14 +854,14 @@ static int ds_walk(ds_discovery *discovery,
                 if (found.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
                     ds_log("REFUSED", child_relative, "reparse-point directory");
                     g_capture_refused++;
-                } else if (!ds_walk(discovery, child, child_relative, depth + 1)) {
+                } else if (!ds_walk(discovery, package, child, child_relative, depth + 1)) {
                     g_find_close(search);
                     return 0;
                 }
             } else if (found.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
                 ds_log("REFUSED", child_relative, "reparse-point file");
                 g_capture_refused++;
-            } else if (!ds_discover_one(discovery, child, child_relative)) {
+            } else if (!ds_discover_one(discovery, package, child, child_relative)) {
                 g_find_close(search);
                 return 0;
             }
@@ -828,7 +887,7 @@ int sh_decl_server_test_walk(const char *directory, const char *relative,
     ds_discovery discovery = {0};
     int ok;
     g_capture_refused = 0;
-    ok = ds_walk(&discovery, directory ? directory : "test",
+    ok = ds_walk(&discovery, "test", directory ? directory : "test",
                  relative ? relative : "", 0);
     if (retained_count) *retained_count = ok ? discovery.count : 0;
     ds_free_discovery(&discovery);
@@ -836,11 +895,16 @@ int sh_decl_server_test_walk(const char *directory, const char *relative,
 }
 #endif
 
+/* The package set is 26 KB and these captures already carry large frames, so it
+ * lives in static storage rather than on the stack: putting it on the stack
+ * tripped the /GS guard and terminated DOOM with 0xC0000409. Each capture is a
+ * guarded one-shot on a single thread, so a shared buffer is safe here. */
+static sh_package g_packages[SH_PACKAGES_MAX];
+
 static int ds_capture_snapshot(void)
 {
     char root[MAX_PATH];
     char directory[MAX_PATH];
-    sh_package packages[SH_PACKAGES_MAX];
     size_t package_count = 0, package_index;
     DWORD attributes;
     DWORD error;
@@ -857,7 +921,7 @@ static int ds_capture_snapshot(void)
     /* One decls root per installed package, walked into a single discovery set
      * so the existing case-insensitive collision rule sees identities from every
      * package at once and refuses an ambiguous one no matter who published it. */
-    if (!sh_packages_enumerate(root, packages, SH_PACKAGES_MAX, &package_count)) {
+    if (!sh_packages_enumerate(root, g_packages, SH_PACKAGES_MAX, &package_count)) {
         backend_log("decl-server REFUSED: the overrides package directory could not be enumerated completely");
         g_capture_refused++;
         return 0;
@@ -866,7 +930,7 @@ static int ds_capture_snapshot(void)
         backend_log("decl-server idle: no override packages installed");
     }
     for (package_index = 0; package_index < package_count; package_index++) {
-        if (!sh_package_subdir(&packages[package_index], "decls", directory,
+        if (!sh_package_subdir(&g_packages[package_index], "decls", directory,
                                sizeof(directory))) {
             backend_log("decl-server REFUSED: a package decls path exceeded its bounded length");
             g_capture_refused++;
@@ -876,7 +940,7 @@ static int ds_capture_snapshot(void)
         if (attributes == INVALID_FILE_ATTRIBUTES) {
             error = GetLastError();
             if (ds_root_attributes_status(attributes, error) != DS_ENUM_DONE) {
-                ds_log_win32_refusal(packages[package_index].name,
+                ds_log_win32_refusal(g_packages[package_index].name,
                                      "GetFileAttributesA", error);
                 g_capture_refused++;
                 goto done;
@@ -889,7 +953,8 @@ static int ds_capture_snapshot(void)
             g_capture_refused++;
             goto done;
         }
-        if (!ds_walk(&discovery, directory, "", 0)) goto done;
+        if (!ds_walk(&discovery, g_packages[package_index].name, directory, "", 0))
+            goto done;
     }
     if (!sh_resource_bridge_gate_ok()) {
         backend_log("decl-server REFUSED: installed-resource manifest snapshot/provider is unavailable; whole decl snapshot refused");
@@ -932,8 +997,14 @@ static int ds_capture_snapshot(void)
         size_t body_length;
 
         if (ordered[i].duplicate) {
-            ds_log("REFUSED", item->source,
-                   "case-insensitive duplicate type/name identity");
+            char detail[320];
+            /* Identical copies were already composed away at discovery, so a
+             * survivor here is a real disagreement: two packages claim one
+             * identity with different bytes and neither can silently win. */
+            _snprintf_s(detail, sizeof(detail), _TRUNCATE,
+                        "case-insensitive duplicate type/name identity published by "
+                        "package '%s' with differing content", item->package);
+            ds_log("REFUSED", item->source, detail);
             g_capture_refused++;
             continue;
         }

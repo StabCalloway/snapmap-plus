@@ -57,6 +57,9 @@ typedef struct rb_entry {
 typedef struct rb_manifest_file {
     char path[MAX_PATH];
     char name[MAX_PATH];
+    /* Two packages may ship a like-named manifest, so a row's provenance is the
+     * package plus the file, never the file alone. */
+    char package[SH_PACKAGE_NAME_CAP];
 } rb_manifest_file;
 
 static volatile LONG g_state = RB_STATE_NEW;
@@ -364,7 +367,8 @@ static int rb_parse_manifest(const rb_manifest_file *manifest,
         }
         if (!entry->alias[0]) strcpy_s(entry->alias, sizeof(entry->alias), entry->name);
         if (_snprintf_s(entry->source, sizeof(entry->source), _TRUNCATE,
-                        "generated/resources/%s:%zu", manifest->name, line_number) < 0) {
+                        "%s/resources/%s:%zu", manifest->package, manifest->name,
+                        line_number) < 0) {
             HeapFree(GetProcessHeap(), 0, body);
             return 0;
         }
@@ -374,30 +378,34 @@ static int rb_parse_manifest(const rb_manifest_file *manifest,
     return 1;
 }
 
-static int rb_collect_manifests(const char *directory, rb_manifest_file *files,
-                                size_t *out_count)
+/* APPEND this package's manifests to `files`. Every installed package
+ * contributes to one set, so this must never restart at index zero: an earlier
+ * version overwrote the accumulated list per package, which silently dropped
+ * every manifest but the last package's, and a package with an empty resources
+ * directory reset the count to zero outright. */
+static int rb_collect_manifests(const char *directory, const char *package,
+                                rb_manifest_file *files, size_t capacity,
+                                size_t *inout_count)
 {
     char pattern[MAX_PATH];
     WIN32_FIND_DATAA found;
     HANDLE search;
     DWORD error;
-    size_t count = 0;
+    size_t count = *inout_count;
+    size_t first = count;
     if (_snprintf_s(pattern, sizeof(pattern), _TRUNCATE, "%s\\*.manifest", directory) < 0)
         return 0;
     search = FindFirstFileA(pattern, &found);
     if (search == INVALID_HANDLE_VALUE) {
         error = GetLastError();
-        if (error == ERROR_FILE_NOT_FOUND) {
-            *out_count = 0;
-            return 1;
-        }
-        return 0;
+        return error == ERROR_FILE_NOT_FOUND;   /* this package ships none */
     }
     for (;;) {
-        if (count >= RB_MAX_MANIFESTS ||
+        if (count >= capacity ||
             (found.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) ||
             _snprintf_s(files[count].path, sizeof(files[count].path), _TRUNCATE,
-                        "%s\\%s", directory, found.cFileName) < 0) {
+                        "%s\\%s", directory, found.cFileName) < 0 ||
+            strcpy_s(files[count].package, sizeof(files[count].package), package) != 0) {
             FindClose(search);
             return 0;
         }
@@ -409,17 +417,54 @@ static int rb_collect_manifests(const char *directory, rb_manifest_file *files,
         if (error != ERROR_NO_MORE_FILES) return 0;
         break;
     }
-    qsort(files, count, sizeof(files[0]), rb_manifest_qsort);
-    *out_count = count;
+    /* Sort within the package. Packages already arrive in a deterministic
+     * order, so the combined set stays reproducible. */
+    qsort(files + first, count - first, sizeof(files[0]), rb_manifest_qsort);
+    *inout_count = count;
     return 1;
+}
+
+/* Two packages that bridge the same resource is the NORMAL case, not an error:
+ * shared gore, FX and animation assets belong to no single demon. An identical
+ * row therefore composes -- the first copy serves it and the rest collapse away,
+ * exactly as an identical cvar requirement does. Only a genuine disagreement is
+ * refused: one provider path claimed by two different identities cannot be
+ * served two ways at once, and guessing a winner would silently hand a player
+ * the wrong asset. */
+static int rb_collapse_identical_rows(void)
+{
+    size_t read, write = 1;
+    if (g_entry_count < 2) return 0;
+    for (read = 1; read < g_entry_count; read++) {
+        const rb_entry *previous = &g_entries[write - 1];
+        const rb_entry *current = &g_entries[read];
+        if (rb_path_cmp_ci(previous->type, current->type) == 0 &&
+            rb_path_cmp_ci(previous->name, current->name) == 0 &&
+            rb_path_cmp_ci(previous->alias, current->alias) == 0)
+            continue;                      /* same row from another package */
+        if (write != read) g_entries[write] = g_entries[read];
+        write++;
+    }
+    read = g_entry_count - write;
+    g_entry_count = write;
+    return (int)read;
 }
 
 static int rb_validate_manifest_set(void)
 {
     size_t i;
     size_t *alias_order;
+    int collapsed;
     if (!g_entry_count) return 0;
     qsort(g_entries, g_entry_count, sizeof(g_entries[0]), rb_entry_identity_qsort);
+    collapsed = rb_collapse_identical_rows();
+    if (collapsed) {
+        char line[160];
+        _snprintf_s(line, sizeof(line), _TRUNCATE,
+                    "resource-bridge composed %d identical row(s) shared between packages",
+                    collapsed);
+        backend_log(line);
+    }
     alias_order = (size_t *)HeapAlloc(GetProcessHeap(), 0,
                                       g_entry_count * sizeof(alias_order[0]));
     if (!alias_order) return 0;
@@ -427,8 +472,18 @@ static int rb_validate_manifest_set(void)
     g_sort_entries = g_entries;
     qsort(alias_order, g_entry_count, sizeof(alias_order[0]), rb_alias_index_qsort);
     for (i = 1; i < g_entry_count; i++) {
-        if (rb_path_cmp_ci(g_entries[alias_order[i - 1]].alias,
-                           g_entries[alias_order[i]].alias) == 0) {
+        const rb_entry *a = &g_entries[alias_order[i - 1]];
+        const rb_entry *b = &g_entries[alias_order[i]];
+        if (rb_path_cmp_ci(a->alias, b->alias) == 0) {
+            char line[512];
+            /* Name both rows: with several packages installed, "a collision"
+             * without the owners is not an actionable diagnostic. */
+            _snprintf_s(line, sizeof(line), _TRUNCATE,
+                        "resource-bridge REFUSED: provider path '%s' is claimed by two "
+                        "different identities, %s/%s from %s and %s/%s from %s",
+                        a->alias, a->type, a->name, a->source,
+                        b->type, b->name, b->source);
+            backend_log(line);
             HeapFree(GetProcessHeap(), 0, alias_order);
             return 0;
         }
@@ -646,11 +701,16 @@ static int rb_validate_slices_and_open(const char *doom_base)
     return 1;
 }
 
+/* The package set is 26 KB and these captures already carry large frames, so it
+ * lives in static storage rather than on the stack: putting it on the stack
+ * tripped the /GS guard and terminated DOOM with 0xC0000409. Each capture is a
+ * guarded one-shot on a single thread, so a shared buffer is safe here. */
+static sh_package g_packages[SH_PACKAGES_MAX];
+
 int sh_resource_bridge_capture(const char *data_root)
 {
     char directory[MAX_PATH], doom_base[MAX_PATH], pindex_path[MAX_PATH];
     rb_manifest_file manifests[RB_MAX_MANIFESTS];
-    sh_package packages[SH_PACKAGES_MAX];
     size_t package_count = 0;
     size_t manifest_count = 0, total_manifest_bytes = 0, pindex_length, i;
     unsigned char *pindex;
@@ -662,10 +722,10 @@ int sh_resource_bridge_capture(const char *data_root)
     /* Each installed package carries its own resources directory; they are
      * collected into one set so the existing cross-manifest identity and alias
      * collision checks below cover packages as well as files. */
-    if (!sh_packages_enumerate(data_root, packages, SH_PACKAGES_MAX, &package_count))
+    if (!sh_packages_enumerate(data_root, g_packages, SH_PACKAGES_MAX, &package_count))
         return rb_fail("the overrides package directory could not be enumerated completely");
     for (i = 0; i < package_count; i++) {
-        if (!sh_package_subdir(&packages[i], "resources", directory, sizeof(directory)))
+        if (!sh_package_subdir(&g_packages[i], "resources", directory, sizeof(directory)))
             return rb_fail("a package resources path exceeded its bounded length");
         attributes = GetFileAttributesA(directory);
         if (attributes == INVALID_FILE_ATTRIBUTES) {
@@ -677,7 +737,8 @@ int sh_resource_bridge_capture(const char *data_root)
         if (!(attributes & FILE_ATTRIBUTE_DIRECTORY) ||
             (attributes & FILE_ATTRIBUTE_REPARSE_POINT))
             return rb_fail("manifest root is not a regular directory");
-        if (!rb_collect_manifests(directory, manifests, &manifest_count))
+        if (!rb_collect_manifests(directory, g_packages[i].name, manifests,
+                                  RB_MAX_MANIFESTS, &manifest_count))
             return rb_fail("manifest enumeration failed");
     }
     if (!manifest_count) {

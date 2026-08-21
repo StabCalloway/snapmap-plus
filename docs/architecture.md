@@ -256,9 +256,26 @@ shadow and is never searched. Packages are read in case-insensitive name order s
 order, and an enumeration that could not complete -- unreadable subtree, over 64 packages, deeper than 8 --
 refuses rather than running on a partial set.
 
-Identity collisions *between* packages are not silently resolved. They fall through to the decl server's
-existing case-insensitive collision rule, which refuses every member of an ambiguous group and names the
-packages involved.
+### Packages compose; only disagreements are refused
+
+Two packages overlapping is the normal case, not an error -- shared gore, FX and animation assets belong to no
+single demon, and a package that vendors its own prerequisites is being self-contained, not wrong. So the same
+rule applies at all three layers:
+
+| Layer | Two packages ship the same thing | They ship *different* things under one name |
+|---|---|---|
+| Decls | Byte-identical decls compose: the first copy serves the identity, the rest collapse (`decl-server COMPOSED`) | Refused, naming the packages that disagree |
+| Resource manifests | Identical rows compose into one served entry | Refused, naming both provider rows |
+| Requirements | The first request queues the command, the rest compose into it -- so `g_useResourceBlackList 0` asked for by three packages is issued once | A different value for an allowlisted name is refused |
+
+Nothing overwrites anything and nothing wins by ordering. A package never has to know which other packages are
+installed, and a genuine conflict fails closed with a diagnostic naming who conflicted rather than silently
+handing the player the wrong asset.
+
+Requirements are owned by the package, not by Snapmap+. Snapmap+ ships only a tiny allowlist of settings a
+package is *permitted* to ask for; it sets nothing on its own. The cut-content blacklist cvars the Cyberdemon
+needs live in `overrides/cyberdemon/requirements/cyberdemon.requirements`, so uninstalling that package removes
+the request with it.
 
 The pre-package layout -- a single shared `overrides/generated` tree -- is still read, reported as a package
 named `generated`, so existing installs keep working unchanged.

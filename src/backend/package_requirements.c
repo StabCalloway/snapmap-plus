@@ -146,7 +146,13 @@ static int pr_admit(const char *kind, const char *name, const char *value)
             g_allowed[i].requested = 1;
             g_requirement_count++;
         }
-        return 1; /* identical duplicate requirements compose safely */
+        /* Several packages may need the same setting -- the Cyberdemon and any
+         * other cut-content package both need the blacklists off. The first
+         * request queues the command and the rest compose into it, so the
+         * command is issued exactly once and no package has to know about the
+         * others. A DIFFERENT value for an allowlisted name is refused above
+         * rather than resolved by ordering. */
+        return 1;
     }
     return 0;
 }
@@ -180,6 +186,12 @@ static int pr_parse_file(unsigned char *body, size_t length)
     return 1;
 }
 
+/* The package set is 26 KB and these captures already carry large frames, so it
+ * lives in static storage rather than on the stack: putting it on the stack
+ * tripped the /GS guard and terminated DOOM with 0xC0000409. Each capture is a
+ * guarded one-shot on a single thread, so a shared buffer is safe here. */
+static sh_package g_packages[SH_PACKAGES_MAX];
+
 static int pr_capture(const char *data_root)
 {
     char directory[MAX_PATH], pattern[MAX_PATH];
@@ -189,18 +201,17 @@ static int pr_capture(const char *data_root)
     pr_file files[PR_MAX_FILES];
     size_t count = 0, total = 0, i;
     DWORD error;
-    sh_package packages[SH_PACKAGES_MAX];
     size_t package_count = 0, package_index;
 
     if (!data_root || !data_root[0])
         return pr_fail("requirements root path is invalid or too long");
     /* Every installed package may request its own restart-only settings; they
      * are gathered into one set and still pass the same allowlist. */
-    if (!sh_packages_enumerate(data_root, packages, SH_PACKAGES_MAX, &package_count))
+    if (!sh_packages_enumerate(data_root, g_packages, SH_PACKAGES_MAX, &package_count))
         return pr_fail("the overrides package directory could not be enumerated completely");
 
     for (package_index = 0; package_index < package_count; package_index++) {
-        if (!sh_package_subdir(&packages[package_index], "requirements",
+        if (!sh_package_subdir(&g_packages[package_index], "requirements",
                                directory, sizeof(directory)))
             return pr_fail("a package requirements path exceeded its bounded length");
 
@@ -262,8 +273,14 @@ static int pr_capture(const char *data_root)
         }
         total += length;
         if (!pr_parse_file(body, length)) {
+            char detail[MAX_PATH + 128];
             HeapFree(GetProcessHeap(), 0, body);
-            return pr_fail("unsupported or malformed requirement row");
+            /* With several packages installed, "a bad row" without the file is
+             * not actionable: the author has to be told which package asked. */
+            _snprintf_s(detail, sizeof(detail), _TRUNCATE,
+                        "unsupported or malformed requirement row in %s",
+                        files[i].path);
+            return pr_fail(detail);
         }
         HeapFree(GetProcessHeap(), 0, body);
     }

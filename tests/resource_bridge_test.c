@@ -512,6 +512,107 @@ static int probe_installed_snapshot(const char *root, const char *base)
     return 0;
 }
 
+/* Two packages that bridge the SAME resource is the normal case -- shared gore,
+ * FX and animation assets belong to no single demon. The identical rows must
+ * compose into one served entry, not refuse the whole snapshot, and a manifest
+ * from an earlier package must survive a later package being present at all. */
+static void test_packages_compose(void)
+{
+    static const unsigned char compressed[] = {
+        0xab,0xe6,0x52,0x28,0x4b,0xcc,0x29,0x4d,0x55,0xb0,0x55,0x50,0x4a,
+        0xae,0x4c,0x4a,0x2d,0x4a,0x49,0xcd,0xcd,0xcf,0x53,0xe2,0xaa,0xe5,
+        0xaa,0x1e,0x95,0x19,0x95,0x19,0x95,0x21,0x20,0x03,0x00
+    };
+    static const char shared_row[] =
+        "entityDef\tai/demon/cyberdemon\t"
+        "generated/decls/entitydef/ai/demon/cyberdemon.decl\n";
+    static const char conflicting_row[] =
+        "entityDef\tai/demon/baron\t"
+        "generated/decls/entitydef/ai/demon/cyberdemon.decl\n";
+    unsigned char pindex[2048], expected[832];
+    size_t pindex_length;
+    const char *source = NULL;
+    char temp[MAX_PATH], root[MAX_PATH], base[MAX_PATH], path[MAX_PATH];
+    char first[MAX_PATH], second[MAX_PATH];
+    DWORD pid = GetCurrentProcessId();
+
+    GetTempPathA(sizeof(temp), temp);
+    _snprintf_s(root, sizeof(root), _TRUNCATE, "%ssnapmap-plus-rb-compose-%lu",
+                temp, (unsigned long)pid);
+    _snprintf_s(base, sizeof(base), _TRUNCATE, "%s\\base", root);
+    CHECK(make_dir(root));
+    CHECK(make_dir(base));
+    _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\overrides", root); CHECK(make_dir(path));
+
+    /* Package one: the legacy shared tree. */
+    _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\overrides\\generated", root);
+    CHECK(make_dir(path));
+    _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\overrides\\generated\\resources", root);
+    CHECK(make_dir(path));
+    _snprintf_s(first, sizeof(first), _TRUNCATE,
+                "%s\\overrides\\generated\\resources\\shared.manifest", root);
+    CHECK(write_bytes(first, shared_row, sizeof(shared_row) - 1));
+
+    /* Package two: sorts AFTER "generated", so if collection restarted at index
+     * zero per package this package would erase package one's manifest. */
+    _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\overrides\\zz-second", root);
+    CHECK(make_dir(path));
+    _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\overrides\\zz-second\\package.json", root);
+    CHECK(write_bytes(path, "{}", 2));
+    _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\overrides\\zz-second\\resources", root);
+    CHECK(make_dir(path));
+    _snprintf_s(second, sizeof(second), _TRUNCATE,
+                "%s\\overrides\\zz-second\\resources\\shared.manifest", root);
+    CHECK(write_bytes(second, shared_row, sizeof(shared_row) - 1));
+
+    pindex_length = build_pindex(pindex, sizeof(pindex), sizeof(expected), sizeof(compressed));
+    _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\gameresources.pindex", base);
+    CHECK(write_bytes(path, pindex, pindex_length));
+    _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\gameresources.resources", base);
+    CHECK(write_bytes(path, compressed, sizeof(compressed)));
+    expected_body(expected, sizeof(expected));
+
+    sh_resource_bridge_test_set_doom_base(base);
+    CHECK(sh_resource_bridge_capture(root) == 1);
+    /* One entry, not two, and not a refusal. */
+    CHECK(sh_resource_bridge_entry_count() == 1);
+    CHECK(sh_resource_bridge_decl_count() == 1);
+    {   /* the survivor still carries which package's manifest row served it */
+        const char *type = NULL, *name = NULL;
+        CHECK(sh_resource_bridge_decl_metadata(0, &type, &name, &source) == 1);
+        CHECK(name && strcmp(name, "ai/demon/cyberdemon") == 0);
+    }
+    sh_resource_bridge_test_reset();
+
+    /* A real disagreement is different: one provider path cannot serve two
+     * identities, so the snapshot is refused rather than silently picking one. */
+    CHECK(write_bytes(second, conflicting_row, sizeof(conflicting_row) - 1));
+    sh_resource_bridge_test_set_doom_base(base);
+    CHECK(sh_resource_bridge_capture(root) == 0);
+    sh_resource_bridge_test_reset();
+
+    DeleteFileA(first);
+    DeleteFileA(second);
+    _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\overrides\\zz-second\\package.json", root);
+    DeleteFileA(path);
+    _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\overrides\\zz-second\\resources", root);
+    RemoveDirectoryA(path);
+    _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\overrides\\zz-second", root);
+    RemoveDirectoryA(path);
+    _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\gameresources.pindex", base);
+    DeleteFileA(path);
+    _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\gameresources.resources", base);
+    DeleteFileA(path);
+    RemoveDirectoryA(base);
+    _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\overrides\\generated\\resources", root);
+    RemoveDirectoryA(path);
+    _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\overrides\\generated", root);
+    RemoveDirectoryA(path);
+    _snprintf_s(path, sizeof(path), _TRUNCATE, "%s\\overrides", root);
+    RemoveDirectoryA(path);
+    RemoveDirectoryA(root);
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 3) return probe_installed_snapshot(argv[1], argv[2]);
@@ -522,6 +623,7 @@ int main(int argc, char **argv)
     test_huffman_code_spaces();
     test_full_stream_contract();
     test_sparse_snapshot();
+    test_packages_compose();
     if (g_failed) {
         fprintf(stderr, "resource_bridge_test: %d failure(s)\n", g_failed);
         return 1;

@@ -72,12 +72,29 @@ int main(int argc, char **argv)
 
     /* Every override consumer discovers packages instead of hardcoding one
      * shared tree, so a package is a folder the user can drag in and delete. */
-    CHECK(strstr(server, "sh_packages_enumerate(root, packages") != NULL);
-    CHECK(strstr(server, "sh_package_subdir(&packages[package_index], \"decls\"") != NULL);
+    CHECK(strstr(server, "sh_packages_enumerate(root, g_packages") != NULL);
+    CHECK(strstr(server, "sh_package_subdir(&g_packages[package_index], \"decls\"") != NULL);
     CHECK(strstr(bridge, "sh_packages_enumerate(") != NULL);
-    CHECK(strstr(bridge, "sh_package_subdir(&packages[i], \"resources\"") != NULL);
+    CHECK(strstr(bridge, "sh_package_subdir(&g_packages[i], \"resources\"") != NULL);
     CHECK(strstr(requirements, "sh_packages_enumerate(") != NULL);
-    CHECK(strstr(requirements, "sh_package_subdir(&packages[package_index],") != NULL);
+    CHECK(strstr(requirements, "sh_package_subdir(&g_packages[package_index],") != NULL);
+    /* Packages COMPOSE. An identical decl or manifest row shipped by two
+     * packages collapses to one; only a real disagreement is refused, and the
+     * refusal has to name who disagreed or it is not actionable. */
+    CHECK(strstr(server, "ds_files_identical(other->absolute, absolute_path)") != NULL);
+    CHECK(strstr(server, "decl-server COMPOSED:") != NULL);
+    CHECK(strstr(server, "item->package") != NULL);
+    CHECK(strstr(bridge, "rb_collapse_identical_rows") != NULL);
+    CHECK(strstr(bridge, "is claimed by two ") != NULL);
+    /* Manifest collection APPENDS per package. Restarting at index zero
+     * silently dropped every manifest but the last package's. */
+    CHECK(strstr(bridge, "size_t *inout_count") != NULL);
+    CHECK(strstr(bridge, "*out_count = 0;") == NULL);
+    /* 26 KB of package records must not sit on a capture's stack: it tripped
+     * the /GS guard and fast-failed DOOM with 0xC0000409. */
+    CHECK(strstr(server, "sh_package packages[SH_PACKAGES_MAX]") == NULL);
+    CHECK(strstr(bridge, "sh_package packages[SH_PACKAGES_MAX]") == NULL);
+    CHECK(strstr(requirements, "sh_package packages[SH_PACKAGES_MAX]") == NULL);
     CHECK(strstr(server, "snapmap_plus_decl_server_apply") != NULL);
     CHECK(strstr(server, "FILE_FLAG_OPEN_REPARSE_POINT") != NULL);
     CHECK(strstr(server, "DS_REGISTRY_REGISTER_FILE_SLOT 0x38u") != NULL);
@@ -98,7 +115,7 @@ int main(int argc, char **argv)
     CHECK(strstr(server, "ds_log(\"REFUSED\"") != NULL);
     CHECK(strstr(server, "Sleep(") == NULL);
 
-    walk = strstr(server, "!ds_walk(&discovery, directory, \"\", 0)");
+    walk = strstr(server, "!ds_walk(&discovery, g_packages[package_index].name, directory");
     collisions = strstr(server,
                         "sh_decl_server_order_and_admit(ordered, discovery.count, DS_MAX_CANDIDATES);");
     admission = strstr(server, "if (!ordered[i].admitted)");
