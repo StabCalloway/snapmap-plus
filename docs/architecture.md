@@ -222,6 +222,30 @@ config init -> immutable user-overrides snapshot -> resource-shadow install
 The snapshot makes the user-file layer stable for that DOOM process; the setting is changed for a later
 launch, not as a live resource-loader switch.
 
+## Override packages
+
+An override package is one directory below `overrides/` holding its own content, marked by a `package.json`:
+
+```
+overrides/cyberdemon/package.json
+overrides/cyberdemon/decls/<type>/<logical-name>.decl
+overrides/cyberdemon/resources/<name>.manifest
+overrides/cyberdemon/requirements/<name>.requirements
+```
+
+Installing is copying the folder in; uninstalling is deleting it. There is no compile, staging or merge step:
+DOOM never sees this layout, so the three consumers below each read N package roots instead of one shared root.
+Nothing is duplicated on disk, no generated copy can go stale, and no package can leave artefacts behind after
+its folder is gone. A directory without a `package.json` is ignored, so notes and scratch folders are safe to
+keep there. Packages are read in case-insensitive name order so two machines see the same order.
+
+Identity collisions *between* packages are not silently resolved. They fall through to the decl server's
+existing case-insensitive collision rule, which refuses every member of an ambiguous group and names the
+packages involved.
+
+The pre-package layout -- a single shared `overrides/generated` tree -- is still read, reported as a package
+named `generated`, so existing installs keep working unchanged.
+
 ## Existing shadows versus genuinely new decls
 
 The two mechanisms deliberately share one user setting and one data root, but solve different engine
@@ -230,9 +254,9 @@ problems:
 | Path | Trigger | Result |
 |---|---|---|
 | Ordinary file shadow | DOOM requests an already-registered source path | The resource loader receives the user's bytes instead of the packaged bytes. |
-| Installed resource bridge | Startup resolves `overrides/generated/resources/*.manifest` against the installed base-game pindex; DOOM later requests an admitted virtual path | Snapmap+ reads and decodes that exact slice from the user's installed archive into an in-memory stream. |
-| Dynamic decl server | Startup combines `overrides/generated/decls/<type>/...*.decl` with linked game-owned decls; one main-thread command later excludes existing identities | The absent set is copied into an immutable exact `decltree/<type>/<logical-name>.decl` table, each source is submitted once to DOOM's native decl scanner, and missing `snapEditorEntityDef` objects are materialized before the derived palette rebuild. |
-| Package requirements | Startup validates `overrides/generated/requirements/*.requirements`; the backend tick waits for engine `load_state == RUNNING` | Product-audited, idempotent cvar requirements are queued once per process. Arbitrary console text is refused. |
+| Installed resource bridge | Startup resolves `overrides/<package>/resources/*.manifest` against the installed base-game pindex; DOOM later requests an admitted virtual path | Snapmap+ reads and decodes that exact slice from the user's installed archive into an in-memory stream. |
+| Dynamic decl server | Startup combines `overrides/<package>/decls/<type>/...*.decl` with linked game-owned decls; one main-thread command later excludes existing identities | The absent set is copied into an immutable exact `decltree/<type>/<logical-name>.decl` table, each source is submitted once to DOOM's native decl scanner, and missing `snapEditorEntityDef` objects are materialized before the derived palette rebuild. |
+| Package requirements | Startup validates `overrides/<package>/requirements/*.requirements`; the backend tick waits for engine `load_state == RUNNING` | Product-audited, idempotent cvar requirements are queued once per process. Arbitrary console text is refused. |
 
 The installed resource bridge is a sparse read-only source, not a virtual archive build. Each non-comment manifest
 line is exactly three tab-separated fields: decl/resource type, logical name, and installed virtual path. An empty

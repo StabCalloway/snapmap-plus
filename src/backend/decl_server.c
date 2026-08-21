@@ -38,10 +38,10 @@
 #include "overrides.h"
 #include "palette_refresh.h"
 #include "decl_visibility.h"
+#include "packages.h"
 #include "resource_bridge.h"
 #include "user_overrides.h"
 
-#define DS_ROOT_SUFFIX          "\\overrides\\generated\\decls"
 #define DS_INTERNAL_COMMAND     "snapmap_plus_decl_server_apply"
 #define DS_MAX_CANDIDATES       512
 #define DS_MAX_DISCOVERED       (DS_MAX_CANDIDATES * 8)
@@ -840,6 +840,8 @@ static int ds_capture_snapshot(void)
 {
     char root[MAX_PATH];
     char directory[MAX_PATH];
+    sh_package packages[SH_PACKAGES_MAX];
+    size_t package_count = 0, package_index;
     DWORD attributes;
     DWORD error;
     ds_discovery discovery = {0};
@@ -847,32 +849,47 @@ static int ds_capture_snapshot(void)
     size_t i;
     int ok = 0;
 
-    if (!sh_overrides_get_root(root, sizeof(root)) ||
-        _snprintf_s(directory, sizeof(directory), _TRUNCATE, "%s%s", root, DS_ROOT_SUFFIX) < 0) {
-        backend_log("decl-server REFUSED: could not resolve overrides/generated/decls root");
+    if (!sh_overrides_get_root(root, sizeof(root))) {
+        backend_log("decl-server REFUSED: could not resolve the overrides root");
         g_capture_refused++;
         return 0;
     }
-    attributes = GetFileAttributesA(directory);
-    if (attributes == INVALID_FILE_ATTRIBUTES) {
-        error = GetLastError();
-        if (ds_root_attributes_status(attributes, error) == DS_ENUM_DONE) {
-            char line[MAX_PATH + 96];
-            _snprintf_s(line, sizeof(line), _TRUNCATE,
-                        "decl-server idle: no registration directory at %s", directory);
-            backend_log(line);
-        } else {
-            ds_log_win32_refusal("generated/decls", "GetFileAttributesA", error);
-            g_capture_refused++;
-            return 0;
-        }
-    } else if (!(attributes & FILE_ATTRIBUTE_DIRECTORY) ||
-               (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
-        backend_log("decl-server REFUSED: registration root is not a regular directory");
+    /* One decls root per installed package, walked into a single discovery set
+     * so the existing case-insensitive collision rule sees identities from every
+     * package at once and refuses an ambiguous one no matter who published it. */
+    if (!sh_packages_enumerate(root, packages, SH_PACKAGES_MAX, &package_count)) {
+        backend_log("decl-server REFUSED: the overrides package directory could not be enumerated completely");
         g_capture_refused++;
         return 0;
-    } else if (!ds_walk(&discovery, directory, "", 0)) {
-        goto done;
+    }
+    if (package_count == 0) {
+        backend_log("decl-server idle: no override packages installed");
+    }
+    for (package_index = 0; package_index < package_count; package_index++) {
+        if (!sh_package_subdir(&packages[package_index], "decls", directory,
+                               sizeof(directory))) {
+            backend_log("decl-server REFUSED: a package decls path exceeded its bounded length");
+            g_capture_refused++;
+            goto done;
+        }
+        attributes = GetFileAttributesA(directory);
+        if (attributes == INVALID_FILE_ATTRIBUTES) {
+            error = GetLastError();
+            if (ds_root_attributes_status(attributes, error) != DS_ENUM_DONE) {
+                ds_log_win32_refusal(packages[package_index].name,
+                                     "GetFileAttributesA", error);
+                g_capture_refused++;
+                goto done;
+            }
+            continue;                    /* a package may carry no decls at all */
+        }
+        if (!(attributes & FILE_ATTRIBUTE_DIRECTORY) ||
+            (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+            backend_log("decl-server REFUSED: a package decls root is not a regular directory");
+            g_capture_refused++;
+            goto done;
+        }
+        if (!ds_walk(&discovery, directory, "", 0)) goto done;
     }
     if (!sh_resource_bridge_gate_ok()) {
         backend_log("decl-server REFUSED: installed-resource manifest snapshot/provider is unavailable; whole decl snapshot refused");

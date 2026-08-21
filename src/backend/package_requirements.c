@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "backend_log.h"
+#include "packages.h"
 #include "package_requirements.h"
 
 #define PR_ROOT_SUFFIX          "\\overrides\\generated\\requirements"
@@ -188,60 +189,69 @@ static int pr_capture(const char *data_root)
     pr_file files[PR_MAX_FILES];
     size_t count = 0, total = 0, i;
     DWORD error;
+    sh_package packages[SH_PACKAGES_MAX];
+    size_t package_count = 0, package_index;
 
-    if (!data_root || !data_root[0] ||
-        _snprintf_s(directory, sizeof(directory), _TRUNCATE,
-                    "%s%s", data_root, PR_ROOT_SUFFIX) < 0)
+    if (!data_root || !data_root[0])
         return pr_fail("requirements root path is invalid or too long");
+    /* Every installed package may request its own restart-only settings; they
+     * are gathered into one set and still pass the same allowlist. */
+    if (!sh_packages_enumerate(data_root, packages, SH_PACKAGES_MAX, &package_count))
+        return pr_fail("the overrides package directory could not be enumerated completely");
 
-    if (!GetFileAttributesExA(directory, GetFileExInfoStandard, &root_info)) {
+    for (package_index = 0; package_index < package_count; package_index++) {
+        if (!sh_package_subdir(&packages[package_index], "requirements",
+                               directory, sizeof(directory)))
+            return pr_fail("a package requirements path exceeded its bounded length");
+
+        if (!GetFileAttributesExA(directory, GetFileExInfoStandard, &root_info)) {
+            error = GetLastError();
+            if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
+                continue;                   /* a package may request nothing */
+            return pr_fail("requirements directory metadata read failed");
+        }
+        if (!(root_info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+            (root_info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+            return pr_fail("requirements root is not a regular directory");
+        if (_snprintf_s(pattern, sizeof(pattern), _TRUNCATE,
+                        "%s\\*.requirements", directory) < 0)
+            return pr_fail("requirements search path is too long");
+
+        search = FindFirstFileA(pattern, &found);
+        if (search == INVALID_HANDLE_VALUE) {
+            error = GetLastError();
+            if (error == ERROR_FILE_NOT_FOUND) continue;
+            return pr_fail("requirements enumeration could not start");
+        }
+        for (;;) {
+            if ((found.dwFileAttributes &
+                 (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) ||
+                !pr_has_suffix_ci(found.cFileName, ".requirements")) {
+                FindClose(search);
+                return pr_fail("requirements enumeration found a non-regular entry");
+            }
+            if (count >= PR_MAX_FILES ||
+                _snprintf_s(files[count].path, sizeof(files[count].path), _TRUNCATE,
+                            "%s\\%s", directory, found.cFileName) < 0) {
+                FindClose(search);
+                return pr_fail("requirements file count or path limit exceeded");
+            }
+            strncpy_s(files[count].name, sizeof(files[count].name),
+                      found.cFileName, _TRUNCATE);
+            count++;
+            if (!FindNextFileA(search, &found)) break;
+        }
         error = GetLastError();
-        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
-            backend_log("package-requirements idle: no generated/requirements directory");
-            InterlockedExchange(&g_state, PR_STATE_DONE);
-            return 1;
-        }
-        return pr_fail("requirements directory metadata read failed");
+        FindClose(search);
+        if (error != ERROR_NO_MORE_FILES)
+            return pr_fail("requirements enumeration ended unexpectedly");
     }
-    if (!(root_info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
-        (root_info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
-        return pr_fail("requirements root is not a regular directory");
-    if (_snprintf_s(pattern, sizeof(pattern), _TRUNCATE,
-                    "%s\\*.requirements", directory) < 0)
-        return pr_fail("requirements search path is too long");
 
-    search = FindFirstFileA(pattern, &found);
-    if (search == INVALID_HANDLE_VALUE) {
-        error = GetLastError();
-        if (error == ERROR_FILE_NOT_FOUND) {
-            backend_log("package-requirements idle: no *.requirements files");
-            InterlockedExchange(&g_state, PR_STATE_DONE);
-            return 1;
-        }
-        return pr_fail("requirements enumeration could not start");
+    if (!count) {
+        backend_log("package-requirements idle: no *.requirements files");
+        InterlockedExchange(&g_state, PR_STATE_DONE);
+        return 1;
     }
-    for (;;) {
-        if ((found.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) ||
-            !pr_has_suffix_ci(found.cFileName, ".requirements")) {
-            FindClose(search);
-            return pr_fail("requirements enumeration found a non-regular entry");
-        }
-        if (count >= PR_MAX_FILES ||
-            _snprintf_s(files[count].path, sizeof(files[count].path), _TRUNCATE,
-                        "%s\\%s", directory, found.cFileName) < 0) {
-            FindClose(search);
-            return pr_fail("requirements file count or path limit exceeded");
-        }
-        strncpy_s(files[count].name, sizeof(files[count].name),
-                  found.cFileName, _TRUNCATE);
-        count++;
-        if (!FindNextFileA(search, &found)) break;
-    }
-    error = GetLastError();
-    FindClose(search);
-    if (error != ERROR_NO_MORE_FILES)
-        return pr_fail("requirements enumeration ended unexpectedly");
-
     qsort(files, count, sizeof(files[0]), pr_file_qsort);
     for (i = 0; i < count; i++) {
         size_t length = 0;

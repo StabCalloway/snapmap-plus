@@ -245,7 +245,7 @@ boundary including terminal failures.
 ## 2026-08-17 — Cut-content packages no longer need rebuilt game archives
 
 **What changed.** The override provider now accepts bounded metadata-only manifests under
-`overrides/generated/resources`. At launch it resolves every exact manifest triple against the user's installed
+`overrides/<package>/resources`. At launch it resolves every exact manifest triple against the user's installed
 base-game pindex, validates the complete sparse set and archive bounds, and keeps the source archives read-only.
 When the engine asks for an admitted virtual path, Snapmap+ reads and raw-DEFLATE-decodes just that slice into its
 existing in-memory `idFile` stream. The dynamic decl server consumes linked game-owned `.decl` rows from the same

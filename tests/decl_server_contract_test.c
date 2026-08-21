@@ -70,7 +70,14 @@ int main(int argc, char **argv)
     if (package_requirements && decl_server) CHECK(package_requirements < decl_server);
     if (commands && decl_server) CHECK(commands < decl_server);
 
-    CHECK(strstr(server, "\\\\overrides\\\\generated\\\\decls") != NULL);
+    /* Every override consumer discovers packages instead of hardcoding one
+     * shared tree, so a package is a folder the user can drag in and delete. */
+    CHECK(strstr(server, "sh_packages_enumerate(root, packages") != NULL);
+    CHECK(strstr(server, "sh_package_subdir(&packages[package_index], \"decls\"") != NULL);
+    CHECK(strstr(bridge, "sh_packages_enumerate(") != NULL);
+    CHECK(strstr(bridge, "sh_package_subdir(&packages[i], \"resources\"") != NULL);
+    CHECK(strstr(requirements, "sh_packages_enumerate(") != NULL);
+    CHECK(strstr(requirements, "sh_package_subdir(&packages[package_index],") != NULL);
     CHECK(strstr(server, "snapmap_plus_decl_server_apply") != NULL);
     CHECK(strstr(server, "FILE_FLAG_OPEN_REPARSE_POINT") != NULL);
     CHECK(strstr(server, "DS_REGISTRY_REGISTER_FILE_SLOT 0x38u") != NULL);

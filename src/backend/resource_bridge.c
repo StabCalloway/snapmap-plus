@@ -17,6 +17,7 @@
 #include "backend_log.h"
 #include "decl_server_path.h"
 #include "raw_deflate.h"
+#include "packages.h"
 #include "resource_bridge.h"
 
 #define RB_ROOT_SUFFIX            "\\overrides\\generated\\resources"
@@ -649,29 +650,36 @@ int sh_resource_bridge_capture(const char *data_root)
 {
     char directory[MAX_PATH], doom_base[MAX_PATH], pindex_path[MAX_PATH];
     rb_manifest_file manifests[RB_MAX_MANIFESTS];
+    sh_package packages[SH_PACKAGES_MAX];
+    size_t package_count = 0;
     size_t manifest_count = 0, total_manifest_bytes = 0, pindex_length, i;
     unsigned char *pindex;
     DWORD attributes;
     char line[320];
     if (InterlockedCompareExchange(&g_state, RB_STATE_INSTALLING, RB_STATE_NEW) != RB_STATE_NEW)
         return InterlockedCompareExchange(&g_state, RB_STATE_NEW, RB_STATE_NEW) == RB_STATE_READY;
-    if (!data_root || !data_root[0] ||
-        _snprintf_s(directory, sizeof(directory), _TRUNCATE, "%s%s",
-                    data_root, RB_ROOT_SUFFIX) < 0) return rb_fail("manifest root path is invalid");
-    attributes = GetFileAttributesA(directory);
-    if (attributes == INVALID_FILE_ATTRIBUTES) {
-        DWORD error = GetLastError();
-        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
-            backend_log("resource-bridge idle: no generated/resources manifest directory");
-            InterlockedExchange(&g_state, RB_STATE_READY);
-            return 1;
+    if (!data_root || !data_root[0]) return rb_fail("manifest root path is invalid");
+    /* Each installed package carries its own resources directory; they are
+     * collected into one set so the existing cross-manifest identity and alias
+     * collision checks below cover packages as well as files. */
+    if (!sh_packages_enumerate(data_root, packages, SH_PACKAGES_MAX, &package_count))
+        return rb_fail("the overrides package directory could not be enumerated completely");
+    for (i = 0; i < package_count; i++) {
+        if (!sh_package_subdir(&packages[i], "resources", directory, sizeof(directory)))
+            return rb_fail("a package resources path exceeded its bounded length");
+        attributes = GetFileAttributesA(directory);
+        if (attributes == INVALID_FILE_ATTRIBUTES) {
+            DWORD error = GetLastError();
+            if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
+                continue;               /* a package may carry no manifests */
+            return rb_fail("manifest root attributes could not be read");
         }
-        return rb_fail("manifest root attributes could not be read");
+        if (!(attributes & FILE_ATTRIBUTE_DIRECTORY) ||
+            (attributes & FILE_ATTRIBUTE_REPARSE_POINT))
+            return rb_fail("manifest root is not a regular directory");
+        if (!rb_collect_manifests(directory, manifests, &manifest_count))
+            return rb_fail("manifest enumeration failed");
     }
-    if (!(attributes & FILE_ATTRIBUTE_DIRECTORY) || (attributes & FILE_ATTRIBUTE_REPARSE_POINT))
-        return rb_fail("manifest root is not a regular directory");
-    if (!rb_collect_manifests(directory, manifests, &manifest_count))
-        return rb_fail("manifest enumeration failed");
     if (!manifest_count) {
         backend_log("resource-bridge idle: no *.manifest files");
         InterlockedExchange(&g_state, RB_STATE_READY);
