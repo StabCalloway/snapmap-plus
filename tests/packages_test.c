@@ -60,11 +60,19 @@ static void remove_tree(const char *path)
     RemoveDirectoryA(path);
 }
 
-/* Create <root>\overrides\<name>, and its package.json unless `marked` is 0. */
-static void install(const char *overrides, const char *name, int marked)
+/* Create <overrides>\<relative> (making every parent), and its package.json
+ * unless `marked` is 0. `relative` uses '/' separators. */
+static void install(const char *overrides, const char *relative, int marked)
 {
     char dir[MAX_PATH], marker[MAX_PATH];
-    join(dir, sizeof(dir), overrides, name);
+    size_t i;
+    _snprintf_s(dir, sizeof(dir), _TRUNCATE, "%s\\%s", overrides, relative);
+    for (i = 0; dir[i]; i++) {
+        if (dir[i] != '/') continue;
+        dir[i] = 0;
+        CHECK(make_dir(dir));
+        dir[i] = '\\';
+    }
     CHECK(make_dir(dir));
     if (marked) {
         join(marker, sizeof(marker), dir, "package.json");
@@ -82,7 +90,8 @@ static int index_of(const sh_package *packages, size_t count, const char *name)
 
 int main(void)
 {
-    char temp[MAX_PATH], root[MAX_PATH], overrides[MAX_PATH], sub[MAX_PATH];
+    char temp[MAX_PATH], root[MAX_PATH], overrides[MAX_PATH];
+    char sub[MAX_PATH], expected[MAX_PATH];
     sh_package packages[SH_PACKAGES_MAX];
     size_t count = 0;
     DWORD pid = GetCurrentProcessId();
@@ -107,22 +116,51 @@ int main(void)
     install(overrides, "four-demon-runes", 1);
     install(overrides, "notes", 0);          /* no marker: not a package */
     install(overrides, "generated", 0);      /* legacy tree: a package anyway */
+    install(overrides, "shader_includes", 0);/* reserved: never a package */
     join(sub, sizeof(sub), overrides, "loose-file.txt");
     CHECK(touch(sub));                       /* a file is never a package */
 
     CHECK(sh_packages_enumerate(root, packages, SH_PACKAGES_MAX, &count) == 1);
     CHECK(count == 3);
     CHECK(index_of(packages, count, "notes") < 0);
+    CHECK(index_of(packages, count, "shader_includes") < 0);
     CHECK(index_of(packages, count, "loose-file.txt") < 0);
     CHECK(index_of(packages, count, "cyberdemon") == 0);
     CHECK(index_of(packages, count, "four-demon-runes") == 1);
     CHECK(index_of(packages, count, "generated") == 2);
 
+    /* A user may organise installs into grouping folders to any depth. A
+     * grouping folder is searched, never returned, and its name becomes part of
+     * the package's identity so two groups may hold like-named packages. */
+    install(overrides, "editor/lifts", 1);
+    install(overrides, "editor/toybox", 1);
+    install(overrides, "editor/scratch", 0);
+    install(overrides, "demons/hell/imps", 1);
+    CHECK(sh_packages_enumerate(root, packages, SH_PACKAGES_MAX, &count) == 1);
+    CHECK(count == 6);
+    CHECK(index_of(packages, count, "editor") < 0);
+    CHECK(index_of(packages, count, "editor/scratch") < 0);
+    CHECK(index_of(packages, count, "editor/lifts") >= 0);
+    CHECK(index_of(packages, count, "editor/toybox") >= 0);
+    CHECK(index_of(packages, count, "demons/hell/imps") >= 0);
+    /* Sorted by full name, so a group's members stay adjacent and in order. */
+    CHECK(index_of(packages, count, "demons/hell/imps") <
+          index_of(packages, count, "editor/lifts"));
+    CHECK(index_of(packages, count, "editor/lifts") <
+          index_of(packages, count, "editor/toybox"));
+
+    /* A package is a leaf: anything below it is its own content, never another
+     * package, so its layout always means what the package layout says. */
+    install(overrides, "cyberdemon/decls", 1);
+    CHECK(sh_packages_enumerate(root, packages, SH_PACKAGES_MAX, &count) == 1);
+    CHECK(count == 6);
+    CHECK(index_of(packages, count, "cyberdemon/decls") < 0);
+
     /* The root each package reports is its own folder, and subdirectories are
      * joined below it -- this is the whole isolation guarantee. */
     CHECK(sh_package_subdir(&packages[0], "decls", sub, sizeof(sub)) == 1);
-    join(overrides, sizeof(overrides), packages[0].root, "decls");
-    CHECK(strcmp(sub, overrides) == 0);
+    join(expected, sizeof(expected), packages[0].root, "decls");
+    CHECK(strcmp(sub, expected) == 0);
     CHECK(sh_package_subdir(&packages[0], "decls", sub, 8) == 0);
     CHECK(sh_package_subdir(NULL, "decls", sub, sizeof(sub)) == 0);
 
@@ -139,6 +177,11 @@ int main(void)
      * silent truncation: the caller is told so it can refuse. */
     CHECK(sh_packages_enumerate(root, packages, 2, &count) == 0);
     CHECK(count == 2);
+
+    /* A tree deeper than the bound is reported incomplete rather than silently
+     * abandoned partway. */
+    install(overrides, "a/b/c/d/e/f/g/h/i/deep", 1);
+    CHECK(sh_packages_enumerate(root, packages, SH_PACKAGES_MAX, &count) == 0);
 
     remove_tree(root);
     if (g_failed) {

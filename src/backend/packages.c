@@ -7,10 +7,11 @@
  * that. DOOM never sees this directory layout: the decl server derives a decl's
  * type and logical name from its path relative to a decls root, and the resource
  * bridge and requirements reader each glob one subdirectory. All three take a
- * root and append a fixed suffix, so supporting many packages is reading N roots
- * instead of one -- no staging, no generated copies to go stale, no bookkeeping
- * about which package wrote which file, and deleting a folder really does
- * uninstall it.
+ * root and append a fixed suffix, so supporting many packages -- nested to any
+ * depth -- is reading N roots instead of one. No staging, no generated copies to
+ * go stale, no bookkeeping about which package wrote which file, and deleting a
+ * folder really does uninstall it. A compile step would buy nothing and would
+ * add every one of those failure modes back.
  */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -24,6 +25,9 @@
 #define PK_MARKER           "package.json"
 /* The pre-package shared tree, still read so existing installs keep working. */
 #define PK_LEGACY_NAME      "generated"
+/* Engine-meaningful, never a package or a grouping folder: the file shadow
+ * serves ".inc" shader includes straight out of it. */
+#define PK_RESERVED_NAME    "shader_includes"
 
 typedef HANDLE (WINAPI *pk_find_first_fn)(LPCSTR, LPWIN32_FIND_DATAA);
 typedef BOOL (WINAPI *pk_find_next_fn)(HANDLE, LPWIN32_FIND_DATAA);
@@ -59,6 +63,14 @@ static int pk_is_file(const char *path)
            !(attributes & FILE_ATTRIBUTE_REPARSE_POINT);
 }
 
+static int pk_has_marker(const char *directory)
+{
+    char marker[MAX_PATH];
+    if (_snprintf_s(marker, sizeof(marker), _TRUNCATE, "%s\\%s",
+                    directory, PK_MARKER) < 0) return 0;
+    return pk_is_file(marker);
+}
+
 static int pk_append(sh_package *out, size_t capacity, size_t *count,
                      const char *name, const char *root)
 {
@@ -87,24 +99,22 @@ static void pk_sort(sh_package *out, size_t count)
     }
 }
 
-int sh_packages_enumerate(const char *data_root, sh_package *out, size_t capacity,
-                          size_t *count)
+/* Search `directory` (whose path below overrides\ is `prefix`) for packages.
+ * A directory carrying the marker IS a package and is not descended into; any
+ * other directory is a grouping folder and is searched. Returns 0 if any part
+ * of the subtree could not be read or did not fit. */
+static int pk_scan(const char *directory, const char *prefix, unsigned depth,
+                   sh_package *out, size_t capacity, size_t *count)
 {
-    char overrides[MAX_PATH];
     char pattern[MAX_PATH];
-    char candidate[MAX_PATH];
-    char marker[MAX_PATH];
+    char child[MAX_PATH];
+    char name[SH_PACKAGE_NAME_CAP];
     WIN32_FIND_DATAA found;
     HANDLE search;
     int complete = 1;
 
-    if (count) *count = 0;
-    if (!data_root || !data_root[0] || !out || capacity == 0 || !count) return 0;
-    if (_snprintf_s(overrides, sizeof(overrides), _TRUNCATE, "%s%s",
-                    data_root, PK_OVERRIDES_SUFFIX) < 0) return 0;
-    if (!pk_is_directory(overrides)) return 1;   /* nothing installed yet */
-
-    if (_snprintf_s(pattern, sizeof(pattern), _TRUNCATE, "%s\\*", overrides) < 0)
+    if (depth > SH_PACKAGES_MAX_DEPTH) return 0;
+    if (_snprintf_s(pattern, sizeof(pattern), _TRUNCATE, "%s\\*", directory) < 0)
         return 0;
     search = g_find_first(pattern, &found);
     if (search == INVALID_HANDLE_VALUE) {
@@ -114,21 +124,42 @@ int sh_packages_enumerate(const char *data_root, sh_package *out, size_t capacit
     do {
         if (!(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
         if (found.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;
-        if (strcmp(found.cFileName, ".") == 0 || strcmp(found.cFileName, "..") == 0)
-            continue;
-        if (_snprintf_s(candidate, sizeof(candidate), _TRUNCATE, "%s\\%s",
-                        overrides, found.cFileName) < 0) { complete = 0; continue; }
-        /* The legacy shared tree has no package.json but is still a package. */
-        if (_stricmp(found.cFileName, PK_LEGACY_NAME) != 0) {
-            if (_snprintf_s(marker, sizeof(marker), _TRUNCATE, "%s\\%s",
-                            candidate, PK_MARKER) < 0) { complete = 0; continue; }
-            if (!pk_is_file(marker)) continue;
+        if (strcmp(found.cFileName, ".") == 0 ||
+            strcmp(found.cFileName, "..") == 0) continue;
+        if (depth == 0 && _stricmp(found.cFileName, PK_RESERVED_NAME) == 0) continue;
+
+        if (_snprintf_s(child, sizeof(child), _TRUNCATE, "%s\\%s",
+                        directory, found.cFileName) < 0) { complete = 0; continue; }
+        if (_snprintf_s(name, sizeof(name), _TRUNCATE, "%s%s%s",
+                        prefix, prefix[0] ? "/" : "", found.cFileName) < 0) {
+            complete = 0; continue;
         }
-        if (!pk_append(out, capacity, count, found.cFileName, candidate))
-            complete = 0;
+
+        /* The legacy shared tree has no package.json but is still a package. */
+        if ((depth == 0 && _stricmp(found.cFileName, PK_LEGACY_NAME) == 0) ||
+            pk_has_marker(child)) {
+            if (!pk_append(out, capacity, count, name, child)) complete = 0;
+            continue;                       /* a package is a leaf */
+        }
+        if (!pk_scan(child, name, depth + 1, out, capacity, count)) complete = 0;
     } while (g_find_next(search, &found));
     g_find_close(search);
+    return complete;
+}
 
+int sh_packages_enumerate(const char *data_root, sh_package *out, size_t capacity,
+                          size_t *count)
+{
+    char overrides[MAX_PATH];
+    int complete;
+
+    if (count) *count = 0;
+    if (!data_root || !data_root[0] || !out || capacity == 0 || !count) return 0;
+    if (_snprintf_s(overrides, sizeof(overrides), _TRUNCATE, "%s%s",
+                    data_root, PK_OVERRIDES_SUFFIX) < 0) return 0;
+    if (!pk_is_directory(overrides)) return 1;   /* nothing installed yet */
+
+    complete = pk_scan(overrides, "", 0, out, capacity, count);
     pk_sort(out, *count);
     return complete;
 }

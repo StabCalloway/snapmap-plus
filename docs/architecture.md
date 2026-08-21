@@ -236,8 +236,25 @@ overrides/cyberdemon/requirements/<name>.requirements
 Installing is copying the folder in; uninstalling is deleting it. There is no compile, staging or merge step:
 DOOM never sees this layout, so the three consumers below each read N package roots instead of one shared root.
 Nothing is duplicated on disk, no generated copy can go stale, and no package can leave artefacts behind after
-its folder is gone. A directory without a `package.json` is ignored, so notes and scratch folders are safe to
-keep there. Packages are read in case-insensitive name order so two machines see the same order.
+its folder is gone.
+
+A directory *without* a `package.json` is not a package -- it is a grouping folder, and the search continues
+inside it. Users can therefore organise their installs to any depth (up to 8) without anything being compiled:
+
+```
+overrides/editor/lifts/package.json          -> package "editor/lifts"
+overrides/editor/toybox/package.json         -> package "editor/toybox"
+overrides/demons/hell/imps/package.json      -> package "demons/hell/imps"
+```
+
+A package is a leaf; the search never descends into one, so a package cannot contain another and its own
+subdirectories always mean what the layout above says. Inside `decls/` the path *is* the decl's identity
+(`decls/<type>/<logical-name>.decl`), so extra organisation belongs in the grouping folders above a package,
+not inside it. A package's identity is its full path below `overrides/`, so two groups may hold like-named
+packages. Scratch and notes folders are safe to keep alongside; `shader_includes/` is reserved for the file
+shadow and is never searched. Packages are read in case-insensitive name order so two machines see the same
+order, and an enumeration that could not complete -- unreadable subtree, over 64 packages, deeper than 8 --
+refuses rather than running on a partial set.
 
 Identity collisions *between* packages are not silently resolved. They fall through to the decl server's
 existing case-insensitive collision rule, which refuses every member of an ambiguous group and names the

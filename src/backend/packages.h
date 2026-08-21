@@ -6,9 +6,12 @@
 #include <stddef.h>
 
 #define SH_PACKAGES_MAX      64
-#define SH_PACKAGE_NAME_CAP  96
+#define SH_PACKAGE_NAME_CAP  160
+/* How deep below overrides\ a package may sit. Grouping folders are free; this
+ * only bounds the search so a deep or looping tree cannot stall startup. */
+#define SH_PACKAGES_MAX_DEPTH 8
 
-/* An override package is a directory directly below
+/* An override package is any directory at any depth below
  * %LOCALAPPDATA%\snapmap-plus\overrides that contains a package.json, holding
  * its own decls, resources and requirements:
  *
@@ -17,7 +20,21 @@
  *   overrides\cyberdemon\resources\<name>.manifest
  *   overrides\cyberdemon\requirements\<name>.requirements
  *
- * Installing is copying that folder in; uninstalling is deleting it. Nothing is
+ * A directory WITHOUT a package.json is not a package; it is a grouping folder,
+ * and the search continues inside it. That is what lets a user organise their
+ * installs however they like without anything being compiled or merged:
+ *
+ *   overrides\editor\lifts\package.json          -> package "editor/lifts"
+ *   overrides\editor\toybox\package.json         -> package "editor/toybox"
+ *   overrides\demons\cyberdemon\package.json     -> package "demons/cyberdemon"
+ *
+ * A package is a leaf: the search does not descend into one, so a package can
+ * never contain another and its own subdirectories always mean what the package
+ * layout says they mean. Inside `decls`, the path IS the decl's identity
+ * (`decls\<type>\<logical-name>.decl`), so that part is not free-form -- extra
+ * organisation goes in the grouping folders above the package, not inside it.
+ *
+ * Installing is copying a folder in; uninstalling is deleting it. Nothing is
  * compiled, staged or merged anywhere, so a package cannot leave artefacts
  * behind and two packages cannot quietly overwrite each other's files on disk.
  *
@@ -30,15 +47,17 @@
  * refuses every member of an ambiguous identity group; carrying the owning
  * package name is what lets it say which packages collided. */
 typedef struct sh_package {
-    char name[SH_PACKAGE_NAME_CAP];  /* folder name; the package's identity */
+    char name[SH_PACKAGE_NAME_CAP];  /* path below overrides\, '/'-separated */
     char root[MAX_PATH];             /* absolute path to the package folder */
 } sh_package;
 
-/* Enumerate packages below `<data_root>\overrides`, in deterministic
- * case-insensitive name order so two machines see the same order. Directories
- * without a package.json are ignored, as are reparse points. Returns 1 on a
- * complete enumeration (including "none found"), 0 when the directory could not
- * be read; `*count` is always set. */
+/* Enumerate packages below `<data_root>\overrides` at any depth, in
+ * deterministic case-insensitive name order so two machines see the same order.
+ * Directories without a package.json are searched, not returned; reparse points
+ * are skipped. Returns 1 on a complete enumeration (including "none found"), 0
+ * when the tree could not be read in full or did not fit; `*count` is always
+ * set. A caller that needs every package must refuse on 0 rather than run with
+ * a partial set. */
 int sh_packages_enumerate(const char *data_root, sh_package *out, size_t capacity,
                           size_t *count);
 
