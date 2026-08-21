@@ -361,18 +361,35 @@ const sig_entry BACKEND_ENGINE_SIGNATURES[] = {
       "48 89 5C 24 08 57 48 83 EC 20 48 8B 1D ?? ?? ?? ?? 48 8B F9 48 85 DB 74 ?? "
       "0F 1F 80 00 00 00 00 48 8B 4B 10",
       0x1800D20u },
+    { "SnapPaletteBuild", /* void(editor palette object [rcx], progress [rdx]). Rebuilds the
+                             * derived SnapMap entity palette after new decl identities have been
+                             * registered. The call is safe with a NULL progress argument, but its
+                             * object and vtable are build-specific; callers require a clean SIG_OK
+                             * resolve and validate the live palette vtable before invoking it.
+                             * DIRECT RE: 2026-08-20. */
+      "48 8B C4 56 57 41 54 41 56 41 57 48 81 EC 70 07 00 00",
+      0x54AEE0u },
     /* --- dynamic decl server ----------------------------------------------------------------------
-     * DOOM already owns a generic dynamic-decl API. The registry object's vtable exposes type lookup at
-     * +0x58 and AddDeclFromText at +0x70; the latter is the exact route the engine uses to synthesize
-     * runtime materials. Snapmap+ resolves and cross-checks every boundary before calling it:
+     * DOOM already owns a generic source-catalog API. The registry object's vtable exposes source-file
+     * registration/scanning at +0x38 and type lookup at +0x58. Snapmap+ resolves and cross-checks every
+     * boundary before classifying existing identities and submitting immutable exact decltree sources:
      *
      *   DeclRegistryAnchor  -- a small engine helper whose +0x10 MOV RCX,[rip+registrySlot] gives the
      *                          process registry object without a hardcoded .data RVA. The decoder requires
      *                          a CLEAN resolve because it reads inside the prologue.
+     *   DeclRegisterFile    -- registry vtable +0x38, bool(registry, const idStr *source,
+     *                          optional default type); canonicalizes the source to decltree/<source> and
+     *                          scans one path-derived decl body. The source argument is a native 48-byte
+     *                          idStr, not a C string; the caller must construct and destroy that temporary
+     *                          around the call.
      *   DeclTypeByName      -- registry vtable +0x58, short type name -> decl type manager.
-     *   DeclAddFromText     -- registry vtable +0x70, add logical name + source name + body text.
-     *   DeclFind            -- type manager + logical name + makeDefault byte -> decl or NULL; used both
-     *                          to preserve existing identities as SHADOWED and to verify publication.
+     *   DeclFind            -- type manager + logical name + makeDefault byte -> decl or NULL; called with
+     *                          makeDefault=0 only to exclude existing SHADOWED identities before scanning.
+     *   DeclSourceFind      -- FUN_1417B34B0, type manager + logical name -> idDeclSource or NULL. The
+     *                          scanner installer calls this at 0x1417B2314; a non-NULL result means the
+     *                          source record already exists, while NULL permits the scanner to create it.
+     *                          This is lookup-only and does not materialize a live decl object. The native
+     *                          routine accepts a logical name without `.decl` and performs its own normalization.
      *
      * Each pattern is unique in the pinned unpacked image. sig_test additionally proves the vtable method
      * RVAs; decl_server.c refuses the whole service if the live vtable does not equal these resolves. */
@@ -380,18 +397,24 @@ const sig_entry BACKEND_ENGINE_SIGNATURES[] = {
       "40 53 48 83 EC 30 48 8B D9 4C 8D 05 ?? ?? ?? ?? 48 8B 0D ?? ?? ?? ?? "
       "48 8B D3 48 8B 01 FF 90 C0 00 00 00",
       0x184E1D0u },
+    { "DeclRegisterFile",
+      "40 57 48 81 EC A0 00 00 00 48 C7 44 24 20 FE FF FF FF 48 89 9C 24 C8 00 00 00 "
+      "48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 84 24 90 00 00 00 49 8B F8 48 8B D9 "
+      "48 8D 4C 24 30 E8 ?? ?? ?? ?? 90 48 8D 4C 24 30 E8 ?? ?? ?? ?? "
+      "48 8D 4C 24 30 E8 ?? ?? ?? ??",
+      0x17B7330u },
     { "DeclTypeByName",
       "48 89 6C 24 18 56 48 83 EC 20 48 8B EA 48 8B F1 48 85 D2 74 ?? 80 3A 00 74 ?? "
       "48 89 5C 24 30 33 DB 48 89 7C 24 38 39 59 10",
       0x17B43B0u },
-    { "DeclAddFromText",
-      "40 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 C8 DC FF FF B8 38 24 00 00 "
-      "E8 ?? ?? ?? ?? 48 2B E0 48 C7 44 24 28 FE FF FF FF",
-      0x17B2C00u },
     { "DeclFind",
       "40 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 F0 FD FF FF 48 81 EC 10 03 00 00 "
       "48 C7 44 24 68 FE FF FF FF 48 89 9C 24 68 03 00 00",
       0x17B36F0u },
+    { "DeclSourceFind",
+      "48 8B C4 55 57 41 54 41 56 41 57 48 8D A8 38 FE FF FF 48 81 EC A0 02 00 00 "
+      "48 C7 44 24 20 FE FF FF FF 48 89 58 18 48 89 70 20",
+      0x17B34B0u },
     { "GameMgrLea",        /* thin RET-leaf bool getter (0xb10870) whose prologue loads the
                             * gameMgr global via MOV RAX,[rip+gameMgr] (48 8B 05, the FIRST decode-target
                             * opcode, byte offset 0), then CMP [RAX+0xA54A0],0 / SETZ. Decode = rip_next +
@@ -514,6 +537,29 @@ const sig_entry BACKEND_ENGINE_SIGNATURES[] = {
       "48 89 4C 24 08 57 48 83 EC 30 48 C7 44 24 20 FE FF FF FF 48 89 5C 24 48 48 8B D9 "
       "48 8D 05 ?? ?? ?? ?? 48 89 01 33 FF C7 41 18 00 00 33 00",
       0x1A51070u },
+    { "IdFileReadString",   /* idFile::ReadString helper at the pinned old Steam build's +0xe0 vtable
+                              * slot (RVA 0x267390). Install the native helper directly; the C port
+                              * deliberately does not guess the idStr ABI. The body window masks only
+                              * its internal rel32 call and is validated against the real image. */
+      "48 89 5C 24 10 48 89 74 24 18 57 48 83 EC 20 48 8B 01 48 8B DA 41 B8 04 00 00 00 "
+      "C7 44 24 30 00 00 00 00 48 8D 54 24 30 48 8B F9 FF 50 28 44 8B 44 24 30 48 8B CB "
+      "48 8B F0 45 85 C0 7E 2D B2 20 E8 ?? ?? ?? ?? 4C 8B 0F 48 8B CF 4C 63 44 24 30",
+      0x267390u },
+    { "IdFileCompare",      /* idFile/idStr comparison helper at +0xe8 (RVA 0x267290). It has a
+                              * build-specific idStr calling convention, so install this clean native
+                              * address directly rather than introducing a guessed wrapper. */
+      "40 53 55 56 57 48 81 EC 98 00 00 00 48 C7 44 24 20 FE FF FF FF 48 8B 05 ?? ?? ?? ?? "
+      "48 33 C4 48 89 84 24 88 00 00 00 41 8B E9 49 8B F8 48 8B F2 48 8B D9 48 8D 0D ?? ?? ?? ?? "
+      "E8 ?? ?? ?? ?? 48 8D 4C 24 28 E8 ?? ?? ?? ?? 90 48 8B 03 48 8D 54 24 28 48 8B CB "
+      "FF 90 E0 00 00 00",
+      0x267290u },
+    { "IdFileWriteString",   /* idFile::WriteString helper at +0xf0 (RVA 0x268470). This exact-build
+                              * native function is placed in the vtable only after all three helpers
+                              * report SIG_OK. */
+      "40 57 48 83 EC 70 48 C7 44 24 28 FE FF FF FF 48 89 9C 24 88 00 00 00 48 8B 05 ?? ?? ?? ?? "
+      "48 33 C4 48 89 44 24 60 48 8B F9 49 8B D0 48 8D 4C 24 30 E8 ?? ?? ?? ?? 90 8B 44 24 38 "
+      "89 44 24 20 48 8B 07 41 B8 04 00 00 00 48 8D 54 24 20 48 8B CF FF 50 30",
+      0x268470u },
     /* --- console-command + cvar registration infra (clone of XINPUT1_3 FUN_1800229b1) --- */
     { "Printf",            /* idCommon message-dispatch (0x1a08e80); every handler's console output via
                             * the Printf wrapper (clone of OG FUN_180006380 -> (1, fmt, &va)) routes here */

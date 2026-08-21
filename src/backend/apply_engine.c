@@ -32,6 +32,8 @@
 #include <string.h>
 #include "snapmap_plus_iface.h"
 #include "apply_engine.h"
+#include "decl_server.h"
+#include "package_requirements.h"
 #include "typeinfo.h"     /* sh_typeinfo_get_declmgr -- the one shared declMgr accessor */
 #include "ui_bridge.h"    /* sh_ui_get_iface -- reach the toast slot for the apply-result toast */
 #include "iface_engine.h" /* sh_iface_class_inherit_ok -- the LAYER-C class/inherit prevention guard */
@@ -2376,6 +2378,12 @@ static void ae_play_log_diff(const ae_play_snap *before, const ae_play_snap *aft
  * reads while building its per-frame capability flags). */
 void sh_apply_prefab_poll_play(void)
 {
+    /* This tick already has the engine's true load-state word. Give declarative package requirements
+     * their one safe post-startup opportunity before doing editor-specific work. */
+    sh_package_requirements_poll();
+    /* Queue dynamic decl publication after requirements in the same engine command buffer. That ordering
+     * makes cut-content blacklist policy effective before a new FX or model-backed decl is parsed. */
+    sh_decl_server_poll();
     if (!g_doom_base) return;
 
 #if AE_PASTE_DIAG_ON
